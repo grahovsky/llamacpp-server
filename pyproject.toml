@@ -1,0 +1,103 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build_meta"
+
+[tool.uv]
+package = false
+
+[project]
+name = "llamacpp-server"
+version = "1.0.0"
+description = "OpenAI-compatible HTTP API server for llama.cpp"
+authors = [{name = "AI Tools Team", email = "dev@ai-tools.local"}]
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["llama-cpp", "api", "openai", "llm", "gguf", "open-webui"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+# Основные зависимости
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "llama-cpp-python>=0.2.28",
+    "structlog>=23.2.0",
+    "dependency-injector>=4.41.0",
+    "aiofiles>=23.2.1",
+]
+
+# Опциональные зависимости
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.28.1",
+    "respx>=0.22.0",
+]
+
+# GPU ускорения - удаляю проблемные extras
+cuda = [
+    "llama-cpp-python[server]>=0.2.28",
+]
+
+# Scripts для запуска
+[project.scripts]
+llamacpp-server = "llamacpp_server.main:main"
+
+# =====================================
+# 🛠️ MODERN PYTHON TOOLING
+# =====================================
+
+# Ruff - линтер и форматтер
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["llamacpp_server"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "UP",        # pyupgrade
+    "B",         # flake8-bugbear
+    "I",         # isort
+    "N",         # pep8-naming
+    "S",         # flake8-bandit
+    "C4",        # flake8-comprehensions
+    "ICN",       # flake8-import-conventions
+    "T20",       # flake8-print
+]
+
+ignore = [
+    "E501",   # Line too long
+    "S101",   # Use of assert
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["llamacpp_server"]
+
+# MyPy - статическая типизация
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"] 
