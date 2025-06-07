@@ -174,7 +174,7 @@ LLAMACPP_N_GPU_LAYERS=20 uv run python -m llamacpp_server.main
 - **CUDA support: True** ✅
 - **RTX 3070 обнаружена** ✅  
 - **Быстрая генерация** ✅
-- **Русский текст работает** ✅
+
 
 ## Производительность
 
@@ -186,7 +186,6 @@ LLAMACPP_N_GPU_LAYERS=20 uv run python -m llamacpp_server.main
 - `n_gpu_layers=0` - только CPU
 - `n_gpu_layers=20` - частично на GPU
 - `n_gpu_layers=-1` - вся модель на GPU
-
 
 ## Если нужна самая свежая версия
 

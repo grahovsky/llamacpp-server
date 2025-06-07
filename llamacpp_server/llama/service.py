@@ -7,6 +7,7 @@ from typing import AsyncIterator
 import structlog
 from llama_cpp import Llama
 
+from ..config.settings import get_settings
 from ..domain.models import (
     ChatCompletionRequest,
     ChatMessage,
@@ -15,6 +16,7 @@ from ..domain.models import (
     TextCompletionRequest,
     Usage,
 )
+from .history_manager import ChatHistoryManager
 
 
 logger = structlog.get_logger(__name__)
@@ -25,19 +27,31 @@ class LlamaService:
     
     def __init__(self, llama: Llama) -> None:
         self._llama = llama
+        settings = get_settings()
+        self._history_manager = ChatHistoryManager(
+            llama_model=llama,
+            max_tokens=settings.max_history_tokens,
+            reserve_tokens=settings.context_reserve_tokens
+        )
         
     async def chat_completion(self, request: ChatCompletionRequest) -> CompletionResponse:
         """Генерация chat completion."""
         logger.info("Обработка chat completion запроса", model=request.model)
         
+        # Подготавливаем сообщения с учетом лимитов контекста
+        messages_dict = [msg.dict() for msg in request.messages]
+        trimmed_messages = self._history_manager.prepare_messages_for_completion(messages_dict)
+        
         # Форматируем сообщения в промпт
-        formatted_prompt = self._format_chat_messages(request.messages)
+        formatted_prompt = self._format_chat_messages([
+            ChatMessage(**msg) for msg in trimmed_messages
+        ])
         
         # Генерируем ответ
         if hasattr(self._llama, 'create_chat_completion'):
             # Используем chat completion если доступен
             response = self._llama.create_chat_completion(
-                messages=[msg.dict() for msg in request.messages],
+                messages=trimmed_messages,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
@@ -68,7 +82,13 @@ class LlamaService:
         """Стриминг chat completion."""
         logger.info("Обработка streaming chat completion запроса", model=request.model)
         
-        formatted_prompt = self._format_chat_messages(request.messages)
+        # Подготавливаем сообщения с учетом лимитов контекста
+        messages_dict = [msg.dict() for msg in request.messages]
+        trimmed_messages = self._history_manager.prepare_messages_for_completion(messages_dict)
+        
+        formatted_prompt = self._format_chat_messages([
+            ChatMessage(**msg) for msg in trimmed_messages
+        ])
         
         # Запускаем в thread pool чтобы не блокировать event loop
         import asyncio

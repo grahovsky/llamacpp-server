@@ -17,12 +17,16 @@ class Settings(BaseSettings):
     )
     
     # === Параметры модели ===
-    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста")] = 2048
+    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста")] = 4096
     n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
-    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 40
+    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
     main_gpu: Annotated[int, Field(ge=0, description="Основная GPU для вычислений")] = 0
     tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
+    
+    # === Управление историей чата ===
+    max_history_tokens: Annotated[int, Field(ge=1, description="Максимум токенов в истории чата")] = 3000
+    context_reserve_tokens: Annotated[int, Field(ge=1, description="Резерв токенов для ответа")] = 1000
     
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"

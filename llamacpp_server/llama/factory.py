@@ -32,6 +32,20 @@ def _get_cuda_device_count() -> int:
 class MockLlama:
     """Mock LLama для разработки."""
     
+    def tokenize(self, text: bytes) -> list[int]:
+        """Mock токенизация для подсчета токенов."""
+        # Простая оценка: 1 токен ≈ 4 символа для латиницы, 2 символа для кириллицы
+        text_str = text.decode('utf-8', errors='ignore')
+        
+        # Подсчитываем символы
+        char_count = len(text_str)
+        
+        # Эмулируем токены (примерно 1 токен на 3-4 символа)
+        estimated_tokens = max(1, char_count // 3)
+        
+        # Возвращаем список фиктивных токенов
+        return list(range(estimated_tokens))
+    
     def create_completion(self, **kwargs):
         """Mock генерация."""
         if kwargs.get("stream", False):
