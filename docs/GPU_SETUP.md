@@ -149,33 +149,6 @@ LLAMACPP_N_GPU_LAYERS=20 uv run python -m llamacpp_server.main
 LLAMACPP_N_GPU_LAYERS=0 uv run python -m llamacpp_server.main
 ```
 
-## ✅ Успешная установка!
-
-### Для Arch Linux (проверено):
-```bash
-# 1. Установить CUDA Toolkit
-sudo pacman -S cuda
-source /etc/profile
-
-# 2. Установить базовые зависимости  
-uv sync --extra cpu
-
-# 3. Скомпилировать с GPU поддержкой
-CMAKE_ARGS="-DGGML_CUDA=on" uv pip install llama-cpp-python --force-reinstall --no-binary llama-cpp-python
-
-# 4. Проверить GPU поддержку
-uv run python -c "import llama_cpp; from llama_cpp import llama_cpp; print('CUDA support:', llama_cpp.llama_supports_gpu_offload())"
-
-# 5. Запустить сервер с GPU
-LLAMACPP_N_GPU_LAYERS=20 uv run python -m llamacpp_server.main
-```
-
-### Результат:
-- **CUDA support: True** ✅
-- **RTX 3070 обнаружена** ✅  
-- **Быстрая генерация** ✅
-
-
 ## Производительность
 
 - **CPU**: ~2-5 токенов/сек
