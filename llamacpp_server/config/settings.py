@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     n_ctx: Annotated[int, Field(ge=1, description="Размер контекста")] = 2048
     n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
-    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 20
+    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 40
+    main_gpu: Annotated[int, Field(ge=0, description="Основная GPU для вычислений")] = 0
+    tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
     
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"

@@ -17,6 +17,18 @@ from ..config import Settings
 logger = structlog.get_logger(__name__)
 
 
+def _get_cuda_device_count() -> int:
+    """Получить количество доступных CUDA устройств."""
+    try:
+        import subprocess
+        result = subprocess.run(['nvidia-smi', '-L'], capture_output=True, text=True)
+        if result.returncode == 0:
+            return len([line for line in result.stdout.strip().split('\n') if line.startswith('GPU')])
+    except FileNotFoundError:
+        pass
+    return 0
+
+
 class MockLlama:
     """Mock LLama для разработки."""
     
@@ -106,20 +118,48 @@ class LlamaFactory:
         
         logger.info("Инициализация LLama модели", model_path=str(settings.model_path))
         
+        # Диагностика GPU поддержки
         try:
-            llama = Llama(
-                model_path=str(settings.model_path),
-                n_ctx=settings.n_ctx,
-                n_batch=settings.n_batch,
-                n_threads=settings.n_threads,
-                n_gpu_layers=settings.n_gpu_layers,
-                use_mmap=settings.use_mmap,
-                use_mlock=settings.use_mlock,
-                chat_format=settings.chat_format,
-                verbose=settings.verbose,
-            )
+            from llama_cpp import llama_cpp
+            gpu_support = hasattr(llama_cpp, 'llama_supports_gpu_offload') and llama_cpp.llama_supports_gpu_offload()
+            logger.info("GPU диагностика", 
+                       gpu_support=gpu_support, 
+                       n_gpu_layers=settings.n_gpu_layers,
+                       cuda_device_count=_get_cuda_device_count())
+        except Exception as e:
+            logger.warning("Ошибка GPU диагностики", error=str(e))
+        
+        try:
+            # Подготавливаем параметры
+            llama_params = {
+                "model_path": str(settings.model_path),
+                "n_ctx": settings.n_ctx,
+                "n_batch": settings.n_batch,
+                "n_threads": settings.n_threads,
+                "n_gpu_layers": settings.n_gpu_layers,
+                "use_mmap": settings.use_mmap,
+                "use_mlock": settings.use_mlock,
+                "chat_format": settings.chat_format,
+                "verbose": settings.verbose,
+            }
             
-            logger.info("LLama модель успешно инициализирована")
+            # Добавляем GPU параметры если есть GPU поддержка
+            if settings.n_gpu_layers > 0:
+                llama_params["main_gpu"] = settings.main_gpu
+                
+                # Обработка tensor_split
+                if settings.tensor_split:
+                    try:
+                        tensor_split = [float(x.strip()) for x in settings.tensor_split.split(',')]
+                        llama_params["tensor_split"] = tensor_split
+                        logger.info("Настройка tensor_split", tensor_split=tensor_split)
+                    except ValueError as e:
+                        logger.warning("Неверный формат tensor_split", error=str(e))
+            
+            llama = Llama(**llama_params)
+            
+            logger.info("LLama модель успешно инициализирована", 
+                       n_gpu_layers=settings.n_gpu_layers)
             return llama
             
         except Exception as e:

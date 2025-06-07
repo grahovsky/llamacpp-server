@@ -25,13 +25,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-# Основные зависимости
+# Основные зависимости (без llama-cpp-python - выбирается отдельно)
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
-    "llama-cpp-python>=0.2.28",
     "structlog>=23.2.0",
     "dependency-injector>=4.41.0",
     "aiofiles>=23.2.1",
@@ -39,6 +38,7 @@ dependencies = [
 
 # Опциональные зависимости
 [project.optional-dependencies]
+# Разработка
 dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
@@ -50,9 +50,24 @@ dev = [
     "respx>=0.22.0",
 ]
 
-# GPU ускорения - удаляю проблемные extras
-cuda = [
-    "llama-cpp-python[server]>=0.2.28",
+# CPU версия (по умолчанию)
+cpu = []
+
+# GPU версии будут устанавливаться отдельно через альтернативные индексы
+# Используйте: uv sync --extra cpu  а затем установите GPU версию
+# См. GPU_INSTALL.md для инструкций
+
+# Все возможности для разработки (CPU версия)
+all = [
+    "llama-cpp-python[server]>=0.3.9",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.28.1",
+    "respx>=0.22.0",
 ]
 
 # Scripts для запуска
