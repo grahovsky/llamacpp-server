@@ -36,6 +36,7 @@ class LlamaService:
         settings = get_settings()
         self._enable_rag = settings.enable_rag and rag_service is not None
         self._rag_search_k = settings.rag_search_k
+        self._use_citation_focused = settings.use_citation_focused_rag
         self._history_manager = ChatHistoryManager(
             llama_model=llama,
             max_tokens=settings.max_history_tokens,
@@ -125,19 +126,30 @@ class LlamaService:
                        rag_service_available=self._rag_service is not None)
             
             try:
-                # Ищем релевантный контекст
-                context = await self._rag_service.search_relevant_context(
-                    user_query, k=self._rag_search_k
-                )
+                # Выбираем метод поиска и формирования промпта
+                context = None
+                enhanced_query = None
                 
+                if self._use_citation_focused:
+                    logger.info("🎯 Используем citation-focused RAG")
+                    context = await self._rag_service.search_relevant_context_with_citations(
+                        user_query, k=self._rag_search_k
+                    )
+                else:
+                    # Обычный RAG
+                    context = await self._rag_service.search_relevant_context(
+                        user_query, k=self._rag_search_k
+                    )
+                
+                # Создаем промпт если есть контекст (независимо от типа поиска)
                 if context:
-                    logger.info("🎯 RAG контекст найден, улучшаем промпт", context_docs=len(context))
-                    
-                    # Улучшаем последнее сообщение пользователя
+                    logger.info("📚 RAG контекст найден", context_docs=len(context))
                     enhanced_query = await self._rag_service.enhance_prompt_with_context(
                         user_query, context
                     )
-                    
+                
+                # Если получили улучшенный запрос, обновляем сообщения
+                if enhanced_query:
                     # Создаем новый список сообщений с улучшенным запросом
                     enhanced_messages = []
                     for msg in request.messages:
@@ -165,7 +177,7 @@ class LlamaService:
                     logger.info("✅ RAG промпт обновлен", 
                                original_length=len(user_query),
                                enhanced_length=len(enhanced_query),
-                               context_docs=len(context))
+                               context_docs=len(context) if context else 0)
                 else:
                     logger.warning("⚠️ RAG контекст не найден")
                     
@@ -205,18 +217,10 @@ class LlamaService:
                        "content_length": len(str(msg.get("content", "")))
                    } for msg in trimmed_messages])
         
-        # Форматируем сообщения в промпт
-        formatted_prompt = self._format_chat_messages([
-            ChatMessage(**msg) for msg in trimmed_messages
-        ])
-        
-        # Логируем финальный промпт (только длину)
-        logger.info("🔍 ФИНАЛЬНЫЙ ПРОМПТ ДЛЯ МОДЕЛИ",
-                   prompt_length=len(formatted_prompt))
-        
         # Генерируем ответ
         if hasattr(self._llama, 'create_chat_completion'):
             # Используем chat completion если доступен
+            logger.info("🔍 Используем chat_completion для генерации", messages_count=len(trimmed_messages))
             response = self._llama.create_chat_completion(
                 messages=trimmed_messages,
                 max_tokens=request.max_tokens,
@@ -228,7 +232,11 @@ class LlamaService:
                 stream=False,
             )
         else:
-            # Fallback на обычную генерацию
+            # Fallback на обычную генерацию с форматированием
+            formatted_prompt = self._format_chat_messages([
+                ChatMessage(**msg) for msg in trimmed_messages
+            ])
+            logger.info("🔍 Fallback на formatted prompt", prompt_length=len(formatted_prompt))
             response = self._llama.create_completion(
                 prompt=formatted_prompt,
                 max_tokens=request.max_tokens,
@@ -285,17 +293,30 @@ class LlamaService:
             logger.info("🧠 RAG обработка streaming запроса")
             
             try:
-                # Ищем релевантный контекст
-                context = await self._rag_service.search_relevant_context(
-                    user_query, k=self._rag_search_k
-                )
+                # Выбираем метод поиска и формирования промпта для streaming
+                context = None
+                enhanced_query = None
                 
+                if self._use_citation_focused:
+                    logger.info("🎯 Используем citation-focused RAG для streaming")
+                    context = await self._rag_service.search_relevant_context_with_citations(
+                        user_query, k=self._rag_search_k
+                    )
+                else:
+                    # Обычный RAG
+                    context = await self._rag_service.search_relevant_context(
+                        user_query, k=self._rag_search_k
+                    )
+                
+                # Создаем промпт если есть контекст (независимо от типа поиска)
                 if context:
-                    # Улучшаем последнее сообщение пользователя
+                    logger.info("📚 RAG контекст для streaming найден", context_docs=len(context))
                     enhanced_query = await self._rag_service.enhance_prompt_with_context(
                         user_query, context
                     )
-                    
+                
+                # Если получили улучшенный запрос, обновляем сообщения
+                if enhanced_query:
                     # Создаем новый список сообщений с улучшенным запросом
                     enhanced_messages = []
                     for msg in request.messages:
@@ -320,7 +341,7 @@ class LlamaService:
                         stream=request.stream
                     )
                     
-                    logger.info("✅ RAG промпт обновлен для streaming", context_docs=len(context))
+                    logger.info("✅ RAG промпт обновлен для streaming", context_docs=len(context) if context else 0)
                     
             except Exception as e:
                 logger.error("❌ Ошибка RAG обработки в streaming", error=str(e))
@@ -343,32 +364,41 @@ class LlamaService:
                    original_count=len(messages_dict),
                    trimmed_count=len(trimmed_messages))
         
-        formatted_prompt = self._format_chat_messages([
-            ChatMessage(**msg) for msg in trimmed_messages
-        ])
-        
-        logger.info("🔍 STREAMING: финальный промпт длина",
-                   prompt_length=len(formatted_prompt))
-        
-        # Логируем сам промпт для debug
-        logger.info("🔍 STREAMING: промпт для модели",
-                   prompt_preview=formatted_prompt[:500] + "..." if len(formatted_prompt) > 500 else formatted_prompt)
+        logger.info("🔍 STREAMING: готов к генерации",
+                   messages_count=len(trimmed_messages))
         
         # Запускаем в thread pool чтобы не блокировать event loop
         import asyncio
         import concurrent.futures
         
         def create_stream():
-            return self._llama.create_completion(
-                prompt=formatted_prompt,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                top_k=request.top_k,
-                repeat_penalty=request.repeat_penalty,
-                seed=request.seed,
-                stream=True,
-            )
+            # Используем chat_completion для стриминга тоже
+            if hasattr(self._llama, 'create_chat_completion'):
+                return self._llama.create_chat_completion(
+                    messages=trimmed_messages,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature,
+                    top_p=request.top_p,
+                    top_k=request.top_k,
+                    repeat_penalty=request.repeat_penalty,
+                    seed=request.seed,
+                    stream=True,
+                )
+            else:
+                # Fallback на форматированный промпт
+                formatted_prompt = self._format_chat_messages([
+                    ChatMessage(**msg) for msg in trimmed_messages
+                ])
+                return self._llama.create_completion(
+                    prompt=formatted_prompt,
+                    max_tokens=request.max_tokens,
+                    temperature=request.temperature,
+                    top_p=request.top_p,
+                    top_k=request.top_k,
+                    repeat_penalty=request.repeat_penalty,
+                    seed=request.seed,
+                    stream=True,
+                )
         
         # Обрабатываем stream в executor
         loop = asyncio.get_event_loop()
@@ -548,7 +578,7 @@ class LlamaService:
         return True  # LLama модель готова после инициализации
     
     def _format_chat_messages(self, messages: list[ChatMessage]) -> str:
-        """Форматирование сообщений в промпт для Mistral-7B."""
+        """Форматирование сообщений в промпт (fallback для старых моделей без chat_completion)."""
         # Убираем <s> - llama.cpp добавляет автоматически
         formatted = ""
         system_content = ""

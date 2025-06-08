@@ -13,12 +13,13 @@ class Settings(BaseSettings):
 
     # === Модель ===
     model_path: Annotated[Path, Field(description="Путь к файлу модели GGUF")] = Path(
-        "models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+        "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+        #"models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
         # "models/llama2:7b.gguf"
     )
     
     # === Параметры модели ===
-    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста")] = 4096
+    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста")] = 8192
     n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
     n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
@@ -37,8 +38,8 @@ class Settings(BaseSettings):
     verbose: Annotated[bool, Field(description="Подробный вывод")] = False
     use_mmap: Annotated[bool, Field(description="Использовать memory mapping")] = True
     use_mlock: Annotated[bool, Field(description="Использовать memory locking")] = False
-    chat_format: Annotated[str, Field(description="Формат чата")] = "llama-2"
-    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.2
+    chat_format: Annotated[str | None, Field(description="Формат чата (None = автоопределение)")] = None
+    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.1
     
     # === Логирование ===
     log_level: Annotated[str, Field(description="Уровень логирования")] = "DEBUG"
@@ -67,6 +68,16 @@ class Settings(BaseSettings):
     rag_search_k: int = Field(
         8,  # Уменьшаем для контроля размера контекста
         description="Количество документов для поиска в RAG"
+    )
+    
+    use_citation_focused_rag: bool = Field(
+        True,
+        description="Использовать citation-focused RAG с усиленным цитированием источников"
+    )
+    
+    rag_prompt_style: str = Field(
+        "simple_citation",
+        description="Стиль RAG промпта: 'strict_context', 'citation_focused', 'simple_citation'"
     )
     
     model_config = {

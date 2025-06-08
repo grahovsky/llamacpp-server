@@ -65,4 +65,16 @@ class RAGServiceProtocol(Protocol):
         self, original_prompt: str, context: List[str]
     ) -> str:
         """Улучшить промпт контекстной информацией."""
+        ...
+    
+    async def search_relevant_context_with_citations(
+        self, query: str, k: int = 5
+    ) -> List[str]:
+        """Найти релевантный контекст для запроса с акцентом на цитирование."""
+        ...
+    
+    async def create_citation_focused_prompt(
+        self, original_prompt: str, context: List[str]
+    ) -> str:
+        """Создать промпт с фокусом на цитирование источников."""
         ... 

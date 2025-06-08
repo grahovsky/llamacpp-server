@@ -140,8 +140,20 @@ class RAGService:
         # Объединяем контекст с разделителями
         context_text = "\n\n".join(context)
         
-        # Используем строгий шаблон из templates
-        enhanced_prompt = RAG_TEMPLATES["strict_context_prompt"].format(
+        # Получаем настройки для выбора стиля промпта
+        settings = get_settings()
+        prompt_style = settings.rag_prompt_style
+        
+        # Выбираем шаблон на основе настройки
+        if prompt_style == "simple_citation":
+            template_key = "simple_citation_prompt"
+        elif prompt_style == "citation_focused":
+            template_key = "citation_focused_prompt"
+        else:
+            template_key = "strict_context_prompt"
+        
+        # Используем выбранный шаблон
+        enhanced_prompt = RAG_TEMPLATES[template_key].format(
             context=context_text,
             question=original_prompt
         )
@@ -150,10 +162,121 @@ class RAGService:
                     original_len=len(original_prompt),
                     enhanced_len=len(enhanced_prompt),
                     context_docs=len(context),
-                    template_used="strict_context_prompt")
+                    prompt_style=prompt_style,
+                    template_used=template_key)
         
         # Детальное логирование для диагностики
         logger.debug("🔍 RAG Enhanced Prompt Preview",
                     enhanced_preview=enhanced_prompt[:800] + "..." if len(enhanced_prompt) > 800 else enhanced_prompt)
+        
+        return enhanced_prompt
+
+    async def search_relevant_context_with_citations(
+        self, query: str, k: int = 5
+    ) -> List[str]:
+        """Найти релевантный контекст для запроса с акцентом на цитирование."""
+        logger.info("🔍 RAG поиск контекста с цитированием", query_preview=query[:100], k=k)
+        
+        try:
+            # Получаем эмбеддинг запроса  
+            query_embedding = await self._embedding_service.embed_text(query)
+            logger.debug("Эмбеддинг создан", embedding_dim=len(query_embedding))
+            
+            # Ищем релевантные документы
+            search_results = await self._vector_store.search(query_embedding, k=k)
+            logger.info("Результаты поиска получены", found_docs=len(search_results))
+            
+            if not search_results:
+                logger.warning("❌ Не найдено релевантных документов")
+                return []
+            
+            # Форматируем контекст с особым акцентом на источники
+            context_docs = []
+            total_length = 0
+            unique_sources = set()
+            
+            for i, result in enumerate(search_results):
+                document = result.document
+                content = document.content
+                score = result.score
+                metadata = document.metadata
+                
+                title = metadata.get('title', 'Без названия')
+                source_url = metadata.get('source', '')
+                chunk_type = metadata.get('chunk_type', 'unknown')
+                
+                # Усиленный формат для цитирования
+                if source_url:
+                    unique_sources.add((title, source_url))
+                    formatted_doc = f"""Документ: {title}
+URL: {source_url}
+Содержание: {content}
+
+"""
+                else:
+                    formatted_doc = f"""Документ: {title}
+URL: [источник неизвестен]
+Содержание: {content}
+
+"""
+                
+                # Проверяем лимит длины
+                if total_length + len(formatted_doc) > self._max_context_length:
+                    remaining = self._max_context_length - total_length
+                    if remaining > 150:  # Минимальный размер для полезного контента
+                        # Сохраняем важные части
+                        header = f"Документ: {title}\nURL: {source_url}\n"
+                        footer = f"\n\n"
+                        content_space = remaining - len(header) - len(footer) - len('Содержание: ') - 20
+                        
+                        if content_space > 80:
+                            truncated_content = content[:content_space] + "...[ОБРЕЗАНО]"
+                            formatted_doc = f'{header}Содержание: {truncated_content}{footer}'
+                            
+                            context_docs.append(formatted_doc)
+                            total_length += len(formatted_doc)
+                            if source_url:
+                                unique_sources.add((title, source_url))
+                    break
+                
+                context_docs.append(formatted_doc)
+                total_length += len(formatted_doc)
+                
+            sources_list = [f"{title} - {url}" for title, url in unique_sources]
+            
+            logger.info("✅ RAG контекст с цитированием готов", 
+                       documents=len(context_docs), 
+                       total_chars=total_length,
+                       unique_sources=len(sources_list),
+                       sources=sources_list)
+            
+            return context_docs
+            
+        except Exception as e:
+            logger.error("❌ Ошибка RAG поиска с цитированием", error=str(e), exc_info=True)
+            return []
+
+    async def create_citation_focused_prompt(
+        self, original_prompt: str, context: List[str]
+    ) -> str:
+        """Создать промпт с фокусом на цитирование источников."""
+        if not context:
+            logger.debug("Нет контекста для citation-focused промпта")
+            return original_prompt
+        
+        # Объединяем контекст
+        context_text = "\n".join(context)
+        
+        # Используем новый шаблон для цитирования
+        enhanced_prompt = RAG_TEMPLATES["citation_focused_prompt"].format(
+            context=context_text,
+            question=original_prompt
+        )
+        
+        logger.debug("Citation-focused промпт создан", 
+                    original_len=len(original_prompt),
+                    enhanced_len=len(enhanced_prompt),
+                    context_docs=len(context),
+                    template_used="citation_focused_prompt")
         
         return enhanced_prompt 
