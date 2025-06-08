@@ -157,6 +157,16 @@ class LlamaFactory:
                 "verbose": settings.verbose,
             }
             
+            # Добавляем новые параметры производительности
+            if hasattr(settings, 'n_ubatch'):
+                llama_params["n_ubatch"] = settings.n_ubatch
+            if hasattr(settings, 'flash_attn') and settings.flash_attn:
+                llama_params["flash_attn"] = settings.flash_attn
+            if hasattr(settings, 'rope_freq_base'):
+                llama_params["rope_freq_base"] = settings.rope_freq_base
+            if hasattr(settings, 'rope_freq_scale'):
+                llama_params["rope_freq_scale"] = settings.rope_freq_scale
+            
             # Добавляем GPU параметры если есть GPU поддержка
             if settings.n_gpu_layers > 0:
                 llama_params["main_gpu"] = settings.main_gpu

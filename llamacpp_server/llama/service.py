@@ -37,10 +37,10 @@ class LlamaService:
         self._enable_rag = settings.enable_rag and rag_service is not None
         self._rag_search_k = settings.rag_search_k
         self._use_citation_focused = settings.use_citation_focused_rag
-        self._history_manager = ChatHistoryManager(
+        self.history_manager = ChatHistoryManager(
             llama_model=llama,
             max_tokens=settings.max_history_tokens,
-            reserve_tokens=settings.context_reserve_tokens
+            reserve_tokens=settings.max_response_tokens
         )
     
     @staticmethod
@@ -206,7 +206,7 @@ class LlamaService:
                        role=last_msg.get("role", "unknown"),
                        full_content=last_msg.get("content", ""))
         
-        trimmed_messages = self._history_manager.prepare_messages_for_completion(messages_dict)
+        trimmed_messages = self.history_manager.prepare_messages_for_completion(messages_dict)
         
         # Логируем результат обрезки
         logger.info("🔍 СООБЩЕНИЯ ПОСЛЕ ОБРЕЗКИ",
@@ -358,7 +358,7 @@ class LlamaService:
             logger.info("🔍 STREAMING: RAG сообщение длина",
                        content_length=len(str(last_msg.get("content", ""))))
         
-        trimmed_messages = self._history_manager.prepare_messages_for_completion(messages_dict)
+        trimmed_messages = self.history_manager.prepare_messages_for_completion(messages_dict)
         
         logger.info("🔍 STREAMING: после обрезки",
                    original_count=len(messages_dict),

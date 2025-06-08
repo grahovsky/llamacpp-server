@@ -204,7 +204,7 @@ async def ollama_generate(
         completion_request = TextCompletionRequest(
             prompt=prompt,
             model=model_name,
-            max_tokens=request_data.get("max_tokens", 1000),
+            max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
             temperature=request_data.get("temperature", 0.7),
             top_p=request_data.get("top_p", 0.95),
             top_k=request_data.get("top_k", 40),
@@ -268,7 +268,7 @@ async def ollama_chat(
         completion_request = ChatCompletionRequest(
             messages=chat_messages,
             model=model_name,
-            max_tokens=request_data.get("max_tokens", 1000),
+            max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
             temperature=request_data.get("temperature", 0.7),
             top_p=request_data.get("top_p", 0.95),
             top_k=request_data.get("top_k", 40),

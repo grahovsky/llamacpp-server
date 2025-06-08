@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -19,16 +19,30 @@ class Settings(BaseSettings):
     )
     
     # === Параметры модели ===
-    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста")] = 8192
+    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 8192
     n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
     n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
     main_gpu: Annotated[int, Field(ge=0, description="Основная GPU для вычислений")] = 0
     tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
     
-    # === Управление историей чата ===
-    max_history_tokens: Annotated[int, Field(ge=1, description="Максимум токенов в истории чата")] = 3800  # Увеличиваем для RAG
-    context_reserve_tokens: Annotated[int, Field(ge=1, description="Резерв токенов для ответа")] = 200   # Уменьшаем резерв
+    # === Дополнительные параметры производительности ===
+    n_ubatch: Annotated[int, Field(ge=1, description="Размер микро-батча для CUDA")] = 512
+    flash_attn: Annotated[bool, Field(description="Использовать Flash Attention (если поддерживается)")] = False
+    rope_freq_base: Annotated[float, Field(ge=1.0, description="RoPE frequency base")] = 10000.0
+    rope_freq_scale: Annotated[float, Field(gt=0.0, description="RoPE frequency scaling factor")] = 1.0
+    
+    # === Управление контекстом и токенами ===
+    # Формула: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer
+    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 2048
+    max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 1024
+    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2048
+    safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 800
+    
+    # === Параметры генерации ===
+    top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = 40
+    top_p: Annotated[float, Field(ge=0.0, le=1.0, description="Top-P (nucleus) sampling")] = 0.9
+    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = 1.1
     
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"
@@ -47,7 +61,7 @@ class Settings(BaseSettings):
     # === Режим разработки ===
     dev_mode: Annotated[bool, Field(description="Режим разработки (без модели)")] = False
     
-    # RAG настройки
+    # === RAG настройки ===
     embedding_model: str = Field(
         "BAAI/bge-m3", 
         description="Модель для создания эмбеддингов"
@@ -56,17 +70,13 @@ class Settings(BaseSettings):
         "./data/faiss_index", 
         description="Путь к FAISS индексу"
     )
-    max_context_length: int = Field(
-        6000,  # Оптимальная длина для уменьшения обрезки
-        description="Максимальная длина контекста для RAG"
-    )
-
+    
     enable_rag: bool = Field(
-        True,  # Включен с улучшенным форматированием
+        True,
         description="Включить RAG для всех запросов"
     )
     rag_search_k: int = Field(
-        8,  # Уменьшаем для контроля размера контекста
+        6,  # Уменьшено для оптимизации
         description="Количество документов для поиска в RAG"
     )
     
@@ -95,6 +105,79 @@ class Settings(BaseSettings):
         # if not v.exists():
         #     raise ValueError(f"Файл модели не найден: {v}")
         return v
+    
+    @field_validator("max_history_tokens")
+    @classmethod
+    def validate_history_tokens(cls, v: int, info) -> int:
+        """Валидация размера истории относительно общего контекста."""
+        if hasattr(info.data, 'n_ctx') and info.data.get('n_ctx'):
+            n_ctx = info.data['n_ctx']
+            if v > n_ctx * 0.7:  # История не должна занимать больше 70% контекста
+                raise ValueError(f"max_history_tokens ({v}) слишком большой для n_ctx ({n_ctx})")
+        return v
+    
+    def validate_context_allocation(self) -> None:
+        """Проверка корректности распределения токенов контекста."""
+        total_allocated = (
+            self.max_history_tokens + 
+            self.max_response_tokens + 
+            self.rag_max_context + 
+            self.safety_buffer_tokens
+        )
+        
+        if total_allocated > self.n_ctx:
+            raise ValueError(
+                f"Сумма токенов превышает размер контекста: "
+                f"{total_allocated} > {self.n_ctx}. "
+                f"История: {self.max_history_tokens}, "
+                f"Ответ: {self.max_response_tokens}, "
+                f"RAG: {self.rag_max_context}, "
+                f"Буфер: {self.safety_buffer_tokens}"
+            )
+    
+    @model_validator(mode="after")
+    def validate_context_allocation_after(self):
+        """Проверка корректности распределения токенов контекста после инициализации."""
+        self.validate_context_allocation()
+        return self
+    
+    @property
+    def available_context_tokens(self) -> int:
+        """Доступные токены контекста после резервирования."""
+        return self.n_ctx - self.safety_buffer_tokens
+    
+    @property
+    def effective_history_limit(self) -> int:
+        """Эффективный лимит истории с учетом RAG."""
+        if self.enable_rag:
+            return min(
+                self.max_history_tokens,
+                self.available_context_tokens - self.rag_max_context - self.max_response_tokens
+            )
+        return min(self.max_history_tokens, self.available_context_tokens - self.max_response_tokens)
+    
+    @property
+    def context_distribution(self) -> dict:
+        """Текущее распределение контекста для отладки."""
+        return {
+            "total_context": self.n_ctx,
+            "history_tokens": self.max_history_tokens,
+            "response_tokens": self.max_response_tokens,
+            "rag_tokens": self.rag_max_context if self.enable_rag else 0,
+            "safety_buffer": self.safety_buffer_tokens,
+            "allocated_total": (
+                self.max_history_tokens + 
+                self.max_response_tokens + 
+                (self.rag_max_context if self.enable_rag else 0) + 
+                self.safety_buffer_tokens
+            ),
+            "remaining": self.n_ctx - (
+                self.max_history_tokens + 
+                self.max_response_tokens + 
+                (self.rag_max_context if self.enable_rag else 0) + 
+                self.safety_buffer_tokens
+            )
+        }
 
 
 @lru_cache()

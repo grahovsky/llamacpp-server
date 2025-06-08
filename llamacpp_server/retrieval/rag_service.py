@@ -2,6 +2,7 @@
 
 from typing import List
 import structlog
+from pathlib import Path
 
 from .protocols import (
     EmbeddingServiceProtocol, 
@@ -26,7 +27,14 @@ class RAGService:
         self._embedding_service = embedding_service
         self._vector_store = vector_store
         settings = get_settings()
-        self._max_context_length = settings.max_context_length
+        self._index_path = Path(settings.faiss_index_path)
+        self._search_k = settings.rag_search_k
+        self._max_context_length = settings.rag_max_context
+        
+        # Инициализируем компоненты
+        self._embedding_model = None
+        self._faiss_index = None
+        self._documents = []
         
     async def search_relevant_context(
         self, query: str, k: int = 5

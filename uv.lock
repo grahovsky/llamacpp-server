@@ -871,6 +871,7 @@ dev = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "pytest" },
 ]
 
 [package.metadata]
@@ -912,7 +913,10 @@ requires-dist = [
 provides-extras = ["dev", "cpu", "all"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "httpx", specifier = ">=0.28.1" }]
+dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pytest", specifier = ">=8.4.0" },
+]
 
 [[package]]
 name = "markupsafe"
