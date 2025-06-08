@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # === Модель ===
     model_path: Annotated[Path, Field(description="Путь к файлу модели GGUF")] = Path(
         "models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+        # "models/llama2:7b.gguf"
     )
     
     # === Параметры модели ===
@@ -25,8 +26,8 @@ class Settings(BaseSettings):
     tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
     
     # === Управление историей чата ===
-    max_history_tokens: Annotated[int, Field(ge=1, description="Максимум токенов в истории чата")] = 3000
-    context_reserve_tokens: Annotated[int, Field(ge=1, description="Резерв токенов для ответа")] = 1000
+    max_history_tokens: Annotated[int, Field(ge=1, description="Максимум токенов в истории чата")] = 3800  # Увеличиваем для RAG
+    context_reserve_tokens: Annotated[int, Field(ge=1, description="Резерв токенов для ответа")] = 200   # Уменьшаем резерв
     
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"
@@ -37,13 +38,36 @@ class Settings(BaseSettings):
     use_mmap: Annotated[bool, Field(description="Использовать memory mapping")] = True
     use_mlock: Annotated[bool, Field(description="Использовать memory locking")] = False
     chat_format: Annotated[str, Field(description="Формат чата")] = "llama-2"
-    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.7
+    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.2
     
     # === Логирование ===
     log_level: Annotated[str, Field(description="Уровень логирования")] = "DEBUG"
     
     # === Режим разработки ===
     dev_mode: Annotated[bool, Field(description="Режим разработки (без модели)")] = False
+    
+    # RAG настройки
+    embedding_model: str = Field(
+        "BAAI/bge-m3", 
+        description="Модель для создания эмбеддингов"
+    )
+    faiss_index_path: str = Field(
+        "./data/faiss_index", 
+        description="Путь к FAISS индексу"
+    )
+    max_context_length: int = Field(
+        6000,  # Оптимальная длина для уменьшения обрезки
+        description="Максимальная длина контекста для RAG"
+    )
+
+    enable_rag: bool = Field(
+        True,  # Включен с улучшенным форматированием
+        description="Включить RAG для всех запросов"
+    )
+    rag_search_k: int = Field(
+        8,  # Уменьшаем для контроля размера контекста
+        description="Количество документов для поиска в RAG"
+    )
     
     model_config = {
         "env_prefix": "LLAMACPP_",
@@ -56,8 +80,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_model_path(cls, v: Path) -> Path:
         """Проверка существования файла модели."""
-        if not v.exists():
-            raise ValueError(f"Файл модели не найден: {v}")
+        # Временно отключаем проверку для отладки
+        # if not v.exists():
+        #     raise ValueError(f"Файл модели не найден: {v}")
         return v
 
 

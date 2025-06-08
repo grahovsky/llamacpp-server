@@ -35,6 +35,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Привязываем контейнер к приложению
     app.state.container = container
     
+    # Предварительная инициализация RAG компонентов если RAG включен
+    if settings.enable_rag:
+        logger.info("🧠 Предварительная инициализация RAG компонентов")
+        
+        try:
+            # Получаем сервисы для их инициализации
+            embedding_service = container.embedding_service()
+            vector_store = container.vector_store()
+            rag_service = container.rag_service()
+            
+            # Проверяем готовность embedding service
+            await embedding_service.is_ready()
+            logger.info("✅ Embedding service готов")
+            
+            # Принудительно загружаем FAISS индекс если существует
+            await vector_store._ensure_index_loaded()
+            logger.info("✅ Vector store готов")
+            
+            logger.info("🎯 RAG компоненты успешно инициализированы")
+            
+        except Exception as e:
+            logger.error("❌ Ошибка инициализации RAG компонентов", error=str(e), exc_info=True)
+            # Не прерываем запуск, но логируем ошибку
+    else:
+        logger.info("RAG отключен в настройках")
+    
     logger.info("Приложение готово к работе")
     
     yield

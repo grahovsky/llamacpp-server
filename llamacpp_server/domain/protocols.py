@@ -3,6 +3,11 @@
 from typing import AsyncIterator, Protocol
 
 from .models import ChatCompletionRequest, CompletionResponse, TextCompletionRequest
+from ..retrieval.protocols import (
+    EmbeddingServiceProtocol,
+    VectorStoreProtocol,
+    RAGServiceProtocol
+)
 
 
 class LlamaServiceProtocol(Protocol):
@@ -42,4 +47,12 @@ class PromptServiceProtocol(Protocol):
     
     async def format_chat_prompt(self, messages: list) -> str:
         """Форматировать промпт для чата."""
-        ... 
+        ...
+
+
+# RAG Protocols
+from ..retrieval.protocols import (
+    EmbeddingServiceProtocol,
+    VectorStoreProtocol,
+    RAGServiceProtocol
+) 
