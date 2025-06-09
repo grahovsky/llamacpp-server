@@ -155,10 +155,8 @@ class RAGService:
         # Выбираем шаблон на основе настройки
         if prompt_style == "simple_citation":
             template_key = "simple_citation_prompt"
-        elif prompt_style == "citation_focused":
-            template_key = "citation_focused_prompt"
         else:
-            template_key = "strict_context_prompt"
+            template_key = "citation_focused_prompt"
         
         # Используем выбранный шаблон
         enhanced_prompt = RAG_TEMPLATES[template_key].format(

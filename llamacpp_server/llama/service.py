@@ -112,12 +112,12 @@ class LlamaService:
             from ..prompts.templates import SYSTEM_PROMPTS
             system_message = ChatMessage(
                 role="system", 
-                content=SYSTEM_PROMPTS["rag_expert"]
+                content=SYSTEM_PROMPTS["default"]
             )
             # Добавляем системное сообщение в начало
             request.messages.insert(0, system_message)
             logger.info("✅ Добавлен системный промпт для RAG", 
-                       prompt_type="rag_expert")
+                       prompt_type="default")
         
         # Если включен RAG и есть пользовательский запрос (не технический)
         if self._enable_rag and user_query and not is_technical:
@@ -281,12 +281,12 @@ class LlamaService:
             from ..prompts.templates import SYSTEM_PROMPTS
             system_message = ChatMessage(
                 role="system", 
-                content=SYSTEM_PROMPTS["rag_expert"]
+                content=SYSTEM_PROMPTS["default"]
             )
             # Добавляем системное сообщение в начало
             request.messages.insert(0, system_message)
             logger.info("✅ Добавлен системный промпт для RAG streaming", 
-                       prompt_type="rag_expert")
+                       prompt_type="default")
         
         # Если включен RAG и есть пользовательский запрос (не технический)
         if self._enable_rag and user_query and not is_technical:
