@@ -175,10 +175,11 @@ async def webui_generate(
             prompt=prompt,
             model=model_name,
             max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
-            temperature=request_data.get("temperature", 0.7),
-            top_p=request_data.get("top_p", 0.95),
-            top_k=request_data.get("top_k", 40),
-            repeat_penalty=request_data.get("repeat_penalty", 1.1),
+            temperature=request_data.get("temperature", get_settings().temperature),
+            top_p=request_data.get("top_p", get_settings().top_p),
+            top_k=request_data.get("top_k", get_settings().top_k),
+            repeat_penalty=request_data.get("repeat_penalty", get_settings().repeat_penalty),
+            seed=request_data.get("seed", None),
             stream=stream
         )
         
@@ -247,10 +248,11 @@ async def webui_chat(
             messages=chat_messages,
             model=model_name,
             max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
-            temperature=request_data.get("temperature", 0.7),
-            top_p=request_data.get("top_p", 0.95),
-            top_k=request_data.get("top_k", 40),
-            repeat_penalty=request_data.get("repeat_penalty", 1.1),
+            temperature=request_data.get("temperature", get_settings().temperature),
+            top_p=request_data.get("top_p", get_settings().top_p),
+            top_k=request_data.get("top_k", get_settings().top_k),
+            repeat_penalty=request_data.get("repeat_penalty", get_settings().repeat_penalty),
+            seed=request_data.get("seed", None),
             stream=stream
         )
         

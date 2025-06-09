@@ -16,9 +16,9 @@ class CompletionRequest(BaseModel):
     
     # Общие поля
     model: str = Field("llama-cpp", description="Имя модели")
-    max_tokens: Optional[int] = Field(1000, ge=1, description="Максимум токенов")
-    temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Температура")
-    top_p: Optional[float] = Field(0.95, ge=0.0, le=1.0, description="Top-p sampling")
+    max_tokens: Optional[int] = Field(2048, ge=1, description="Максимум токенов")
+    temperature: Optional[float] = Field(0.2, ge=0.0, le=2.0, description="Температура")
+    top_p: Optional[float] = Field(0.9, ge=0.0, le=1.0, description="Top-p sampling")
     top_k: Optional[int] = Field(40, ge=1, description="Top-k sampling")
     repeat_penalty: Optional[float] = Field(1.1, ge=0.0, description="Штраф за повторы")
     seed: Optional[int] = Field(None, description="Seed для воспроизводимости")

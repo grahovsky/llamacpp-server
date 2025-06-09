@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 8192
     n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
-    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
+    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 0
     main_gpu: Annotated[int, Field(ge=0, description="Основная GPU для вычислений")] = 0
     tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
     
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Формула: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer
     max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 2048
     max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 1024
-    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2048
+    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 4048
     safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 800
     
     # === Параметры генерации ===
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     use_mmap: Annotated[bool, Field(description="Использовать memory mapping")] = True
     use_mlock: Annotated[bool, Field(description="Использовать memory locking")] = False
     chat_format: Annotated[str | None, Field(description="Формат чата (None = автоопределение)")] = None
-    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.1
+    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.2
     
     # === Логирование ===
     log_level: Annotated[str, Field(description="Уровень логирования")] = "DEBUG"
@@ -76,12 +76,12 @@ class Settings(BaseSettings):
         description="Включить RAG для всех запросов"
     )
     rag_search_k: int = Field(
-        6,  # Уменьшено для оптимизации
+        8,  # Уменьшено для оптимизации
         description="Количество документов для поиска в RAG"
     )
     
     use_citation_focused_rag: bool = Field(
-        True,
+        False,
         description="Использовать citation-focused RAG с усиленным цитированием источников"
     )
     
