@@ -2,7 +2,7 @@
 
 import time
 import uuid
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import structlog
 from llama_cpp import Llama
@@ -16,48 +16,47 @@ from ..domain.models import (
     TextCompletionRequest,
     Usage,
 )
-from .history_manager import ChatHistoryManager
 from ..retrieval.protocols import RAGServiceProtocol
-
+from .history_manager import ChatHistoryManager
 
 logger = structlog.get_logger(__name__)
 
 
 class LlamaService:
     """Сервис для работы с LLama моделью."""
-    
+
     def __init__(
-        self, 
+        self,
         llama: Llama,
         rag_service: RAGServiceProtocol = None
     ) -> None:
+        """Инициализация сервиса."""
         self._llama = llama
         self._rag_service = rag_service
         settings = get_settings()
         self._enable_rag = settings.enable_rag and rag_service is not None
         self._rag_search_k = settings.rag_search_k
-        self._use_citation_focused = settings.use_citation_focused_rag
         self.history_manager = ChatHistoryManager(
             llama_model=llama,
             max_tokens=settings.max_history_tokens,
             reserve_tokens=settings.max_response_tokens
         )
-    
+
     @staticmethod
     def _is_technical_request(query: str) -> bool:
         """Определяет технические запросы от open-webui."""
         if not query:
             return False
-        
+
         # Более строгие паттерны для технических запросов
         technical_patterns = [
             "### task:",
             "generate a concise",
-            "generate 1-3 broad tags", 
+            "generate 1-3 broad tags",
             "summarizing the chat history",
             "categorizing the main themes",
             "json format:",
-            '"title":', 
+            '"title":',
             '"tags":',
             "chat history:",
             "<chat_history>",
@@ -70,26 +69,26 @@ class LlamaService:
             "your entire response must consist solely",
             "raw json object",
         ]
-        
+
         query_lower = query.lower()
-        
+
         # Если запрос содержит технические паттерны
         has_technical_patterns = any(pattern in query_lower for pattern in technical_patterns)
-        
+
         # Дополнительная проверка: если запрос начинается с ### - это технический
         starts_with_task = query_lower.strip().startswith("###")
-        
+
         # Проверка на JSON структуру
         has_json_structure = '"title":' in query_lower or '"tags":' in query_lower
-        
+
         return has_technical_patterns or starts_with_task or has_json_structure
-        
+
     async def chat_completion(self, request: ChatCompletionRequest) -> CompletionResponse:
         """Генерация chat completion с RAG поддержкой."""
-        logger.info("Обработка chat completion запроса", 
-                   model=request.model, 
+        logger.info("Обработка chat completion запроса",
+                   model=request.model,
                    rag_enabled=self._enable_rag)
-        
+
         # Извлекаем последний пользовательский запрос для анализа
         user_query = ""
         for msg in reversed(request.messages):
@@ -99,7 +98,7 @@ class LlamaService:
 
         # Проверяем тип запроса
         is_technical = self._is_technical_request(user_query)
-        
+
         # Логируем тип запроса
         if user_query:
             logger.info("🔍 ТИП ЗАПРОСА",
@@ -111,43 +110,38 @@ class LlamaService:
         if not has_system_message and not is_technical:
             from ..prompts.templates import SYSTEM_PROMPTS
             system_message = ChatMessage(
-                role="system", 
+                role="system",
                 content=SYSTEM_PROMPTS["default"]
             )
             # Добавляем системное сообщение в начало
             request.messages.insert(0, system_message)
-            logger.info("✅ Добавлен системный промпт для RAG", 
+            logger.info("✅ Добавлен системный промпт для RAG",
                        prompt_type="default")
-        
+
         # Если включен RAG и есть пользовательский запрос (не технический)
         if self._enable_rag and user_query and not is_technical:
-            logger.info("🧠 RAG обработка запроса", 
+            logger.info("🧠 RAG обработка запроса",
                        query_preview=user_query[:100],
                        rag_service_available=self._rag_service is not None)
-            
+
             try:
                 # Выбираем метод поиска и формирования промпта
                 context = None
                 enhanced_query = None
-                
-                if self._use_citation_focused:
+
+                if self._enable_rag:
                     logger.info("🎯 Используем citation-focused RAG")
-                    context = await self._rag_service.search_relevant_context_with_citations(
-                        user_query, k=self._rag_search_k
-                    )
-                else:
-                    # Обычный RAG
                     context = await self._rag_service.search_relevant_context(
                         user_query, k=self._rag_search_k
                     )
-                
+
                 # Создаем промпт если есть контекст (независимо от типа поиска)
                 if context:
                     logger.info("📚 RAG контекст найден", context_docs=len(context))
                     enhanced_query = await self._rag_service.enhance_prompt_with_context(
                         user_query, context
                     )
-                
+
                 # Если получили улучшенный запрос, обновляем сообщения
                 if enhanced_query:
                     # Создаем новый список сообщений с улучшенным запросом
@@ -160,7 +154,7 @@ class LlamaService:
                             )
                         else:
                             enhanced_messages.append(msg)
-                    
+
                     # Обновляем запрос
                     request = ChatCompletionRequest(
                         messages=enhanced_messages,
@@ -173,24 +167,24 @@ class LlamaService:
                         seed=request.seed,
                         stream=request.stream
                     )
-                    
-                    logger.info("✅ RAG промпт обновлен", 
+
+                    logger.info("✅ RAG промпт обновлен",
                                original_length=len(user_query),
                                enhanced_length=len(enhanced_query),
                                context_docs=len(context) if context else 0)
                 else:
                     logger.warning("⚠️ RAG контекст не найден")
-                    
+
             except Exception as e:
                 logger.error("❌ Ошибка RAG обработки", error=str(e), exc_info=True)
         elif not self._enable_rag:
             logger.debug("RAG отключен в настройках")
         else:
             logger.debug("Нет пользовательского запроса для RAG")
-        
+
         # Подготавливаем сообщения с учетом лимитов контекста
         messages_dict = [msg.dict() for msg in request.messages]
-        
+
         # Логируем исходные сообщения для диагностики
         logger.info("🔍 ИСХОДНЫЕ СООБЩЕНИЯ ДЛЯ LLM",
                    messages_count=len(messages_dict),
@@ -198,16 +192,16 @@ class LlamaService:
                        "role": msg.get("role", "unknown"),
                        "content_length": len(str(msg.get("content", "")))
                    } for msg in messages_dict])
-        
+
         # Логируем полное содержимое последнего сообщения если это RAG (без технических)
         if messages_dict and self._enable_rag and not is_technical:
             last_msg = messages_dict[-1]
             logger.debug("🔍 ПОСЛЕДНЕЕ СООБЩЕНИЕ С RAG (ПОЛНОЕ)",
                        role=last_msg.get("role", "unknown"),
                        full_content=last_msg.get("content", ""))
-        
+
         trimmed_messages = self.history_manager.prepare_messages_for_completion(messages_dict)
-        
+
         # Логируем результат обрезки
         logger.info("🔍 СООБЩЕНИЯ ПОСЛЕ ОБРЕЗКИ",
                    original_count=len(messages_dict),
@@ -216,7 +210,7 @@ class LlamaService:
                        "role": msg.get("role", "unknown"),
                        "content_length": len(str(msg.get("content", "")))
                    } for msg in trimmed_messages])
-        
+
         # Генерируем ответ
         if hasattr(self._llama, 'create_chat_completion'):
             # Используем chat completion если доступен
@@ -247,18 +241,18 @@ class LlamaService:
                 seed=request.seed,
                 stream=False,
             )
-        
+
         # Формируем ответ в OpenAI формате
         return self._create_completion_response(response, request.model, "chat.completion")
-    
+
     async def chat_completion_stream(
         self, request: ChatCompletionRequest
     ) -> AsyncIterator[dict]:
         """Стриминг chat completion с RAG поддержкой."""
-        logger.info("Обработка streaming chat completion запроса", 
+        logger.info("Обработка streaming chat completion запроса",
                    model=request.model,
                    rag_enabled=self._enable_rag)
-        
+
         # Извлекаем последний пользовательский запрос для анализа
         user_query = ""
         for msg in reversed(request.messages):
@@ -268,7 +262,7 @@ class LlamaService:
 
         # Проверяем тип запроса для streaming
         is_technical = self._is_technical_request(user_query)
-        
+
         # Логируем тип запроса
         if user_query:
             logger.info("🔍 STREAMING ТИП ЗАПРОСА",
@@ -280,41 +274,36 @@ class LlamaService:
         if not has_system_message and not is_technical:
             from ..prompts.templates import SYSTEM_PROMPTS
             system_message = ChatMessage(
-                role="system", 
+                role="system",
                 content=SYSTEM_PROMPTS["default"]
             )
             # Добавляем системное сообщение в начало
             request.messages.insert(0, system_message)
-            logger.info("✅ Добавлен системный промпт для RAG streaming", 
+            logger.info("✅ Добавлен системный промпт для RAG streaming",
                        prompt_type="default")
-        
+
         # Если включен RAG и есть пользовательский запрос (не технический)
         if self._enable_rag and user_query and not is_technical:
             logger.info("🧠 RAG обработка streaming запроса")
-            
+
             try:
                 # Выбираем метод поиска и формирования промпта для streaming
                 context = None
                 enhanced_query = None
-                
-                if self._use_citation_focused:
+
+                if self._enable_rag:
                     logger.info("🎯 Используем citation-focused RAG для streaming")
-                    context = await self._rag_service.search_relevant_context_with_citations(
-                        user_query, k=self._rag_search_k
-                    )
-                else:
-                    # Обычный RAG
                     context = await self._rag_service.search_relevant_context(
                         user_query, k=self._rag_search_k
                     )
-                
+
                 # Создаем промпт если есть контекст (независимо от типа поиска)
                 if context:
                     logger.info("📚 RAG контекст для streaming найден", context_docs=len(context))
                     enhanced_query = await self._rag_service.enhance_prompt_with_context(
                         user_query, context
                     )
-                
+
                 # Если получили улучшенный запрос, обновляем сообщения
                 if enhanced_query:
                     # Создаем новый список сообщений с улучшенным запросом
@@ -327,7 +316,7 @@ class LlamaService:
                             )
                         else:
                             enhanced_messages.append(msg)
-                    
+
                     # Обновляем запрос
                     request = ChatCompletionRequest(
                         messages=enhanced_messages,
@@ -340,37 +329,37 @@ class LlamaService:
                         seed=request.seed,
                         stream=request.stream
                     )
-                    
+
                     logger.info("✅ RAG промпт обновлен для streaming", context_docs=len(context) if context else 0)
-                    
+
             except Exception as e:
                 logger.error("❌ Ошибка RAG обработки в streaming", error=str(e))
-        
+
         # Подготавливаем сообщения с учетом лимитов контекста
         messages_dict = [msg.dict() for msg in request.messages]
-        
+
         # Логируем для streaming тоже (но короче)
         logger.info("🔍 STREAMING: исходные сообщения",
                    messages_count=len(messages_dict))
-        
+
         if messages_dict and self._enable_rag:
             last_msg = messages_dict[-1]
             logger.info("🔍 STREAMING: RAG сообщение длина",
                        content_length=len(str(last_msg.get("content", ""))))
-        
+
         trimmed_messages = self.history_manager.prepare_messages_for_completion(messages_dict)
-        
+
         logger.info("🔍 STREAMING: после обрезки",
                    original_count=len(messages_dict),
                    trimmed_count=len(trimmed_messages))
-        
+
         logger.info("🔍 STREAMING: готов к генерации",
                    messages_count=len(trimmed_messages))
-        
+
         # Запускаем в thread pool чтобы не блокировать event loop
         import asyncio
         import concurrent.futures
-        
+
         def create_stream():
             # Используем chat_completion для стриминга тоже
             if hasattr(self._llama, 'create_chat_completion'):
@@ -399,19 +388,19 @@ class LlamaService:
                     seed=request.seed,
                     stream=True,
                 )
-        
+
         # Обрабатываем stream в executor
         loop = asyncio.get_event_loop()
-        
+
         async def process_stream():
             # Получаем stream
             stream = create_stream()
-            
+
             # Если это list (mock), обрабатываем с задержками
             if isinstance(stream, list):
                 for chunk in stream:
                     await asyncio.sleep(0.2)  # Эмулируем задержку генерации
-                    
+
                     # Приводим к стандартному формату
                     if "choices" in chunk and chunk["choices"]:
                         choice = chunk["choices"][0]
@@ -435,17 +424,17 @@ class LlamaService:
                         return next(stream_iter)
                     except StopIteration:
                         return None
-                
+
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     stream_iter = iter(stream)
-                    
+
                     while True:
                         # Получаем следующий чанк в thread pool
                         chunk = await loop.run_in_executor(executor, get_next_chunk, stream_iter)
-                        
+
                         if chunk is None:
                             break
-                        
+
                         # Приводим к стандартному формату
                         if "choices" in chunk and chunk["choices"]:
                             choice = chunk["choices"][0]
@@ -462,14 +451,14 @@ class LlamaService:
                                 yield chunk
                         else:
                             yield chunk
-        
+
         async for chunk in process_stream():
             yield chunk
-    
+
     async def text_completion(self, request: TextCompletionRequest) -> CompletionResponse:
         """Генерация text completion."""
         logger.info("Обработка text completion запроса", model=request.model)
-        
+
         response = self._llama.create_completion(
             prompt=request.prompt,
             max_tokens=request.max_tokens,
@@ -480,19 +469,19 @@ class LlamaService:
             seed=request.seed,
             stream=False,
         )
-        
+
         return self._create_completion_response(response, request.model, "text_completion")
-    
+
     async def text_completion_stream(
         self, request: TextCompletionRequest
     ) -> AsyncIterator[dict]:
         """Стриминг text completion."""
         logger.info("Обработка streaming text completion запроса", model=request.model)
-        
+
         # Запускаем в thread pool чтобы не блокировать event loop
         import asyncio
         import concurrent.futures
-        
+
         def create_stream():
             return self._llama.create_completion(
                 prompt=request.prompt,
@@ -504,19 +493,19 @@ class LlamaService:
                 seed=request.seed,
                 stream=True,
             )
-        
+
         # Обрабатываем stream в executor
         loop = asyncio.get_event_loop()
-        
+
         async def process_stream():
             # Получаем stream
             stream = create_stream()
-            
+
             # Если это list (mock), обрабатываем с задержками
             if isinstance(stream, list):
                 for chunk in stream:
                     await asyncio.sleep(0.2)  # Эмулируем задержку генерации
-                    
+
                     # Стандартизируем формат чанков
                     if "choices" in chunk and chunk["choices"]:
                         choice = chunk["choices"][0]
@@ -541,17 +530,17 @@ class LlamaService:
                         return next(stream_iter)
                     except StopIteration:
                         return None
-                
+
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     stream_iter = iter(stream)
-                    
+
                     while True:
                         # Получаем следующий чанк в thread pool
                         chunk = await loop.run_in_executor(executor, get_next_chunk, stream_iter)
-                        
+
                         if chunk is None:
                             break
-                        
+
                         # Стандартизируем формат чанков
                         if "choices" in chunk and chunk["choices"]:
                             choice = chunk["choices"][0]
@@ -569,21 +558,21 @@ class LlamaService:
                                 yield chunk
                         else:
                             yield chunk
-        
+
         async for chunk in process_stream():
             yield chunk
-    
+
     async def is_ready(self) -> bool:
         """Проверка готовности модели."""
         return True  # LLama модель готова после инициализации
-    
+
     def _format_chat_messages(self, messages: list[ChatMessage]) -> str:
         """Форматирование сообщений в промпт (fallback для старых моделей без chat_completion)."""
         # Убираем <s> - llama.cpp добавляет автоматически
         formatted = ""
         system_content = ""
         user_content = ""
-        
+
         # Собираем системный промпт и пользовательский контент
         for msg in messages:
             if msg.role == "system":
@@ -593,21 +582,21 @@ class LlamaService:
             elif msg.role == "assistant":
                 # Для истории диалога (пока не используем)
                 pass
-        
+
         # Формат Mistral без <s> (llama.cpp добавит сам)
         if system_content and user_content:
             formatted = f"[INST] <<SYS>>\n{system_content}\n<</SYS>>\n\n{user_content} [/INST]"
         elif user_content:
             formatted = f"[INST] {user_content} [/INST]"
-        
+
         return formatted
-    
+
     def _create_completion_response(
         self, response: dict, model: str, object_type: str
     ) -> CompletionResponse:
         """Создание ответа в OpenAI формате."""
         choice = response["choices"][0]
-        
+
         # Обработка разных типов ответов
         if object_type == "chat.completion" and "message" in choice:
             # Chat completion ответ
@@ -630,7 +619,7 @@ class LlamaService:
                 ),
                 finish_reason=choice.get("finish_reason", "stop"),
             )
-        
+
         return CompletionResponse(
             id=f"cmpl-{uuid.uuid4().hex}",
             object=object_type,
@@ -642,4 +631,4 @@ class LlamaService:
                 completion_tokens=response["usage"]["completion_tokens"],
                 total_tokens=response["usage"]["total_tokens"],
             ),
-        ) 
+        )

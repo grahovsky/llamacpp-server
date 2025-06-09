@@ -1,1 +1,1 @@
-"""Тесты для llamacpp-server.""" 
+"""Тесты для llamacpp-server."""

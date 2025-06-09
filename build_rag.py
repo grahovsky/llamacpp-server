@@ -2,9 +2,11 @@
 """Построение RAG векторной базы из confluence_data.json с семантической разбивкой."""
 
 import asyncio
-from llamacpp_server.retrieval.rag_builder import RAGBuilder
 from pathlib import Path
+
 import structlog
+
+from llamacpp_server.retrieval.rag_builder import RAGBuilder
 
 # Настраиваем логирование
 structlog.configure(
@@ -26,7 +28,7 @@ logger = structlog.get_logger(__name__)
 async def main():
     """Главная функция для построения RAG с семантической разбивкой."""
     import sys
-    
+
     # Определяем тип разбивки из аргументов командной строки
     use_semantic = True
     if len(sys.argv) > 1:
@@ -40,14 +42,14 @@ async def main():
             print("  python build_rag.py --simple     # Простая разбивка с перекрытием")
             print("  python build_rag.py --help       # Показать справку")
             return
-    
+
     chunking_type = "семантической" if use_semantic else "простой"
     logger.info(f"🚀 Начинаем построение RAG векторной базы с {chunking_type} разбивкой")
-    
+
     # Настройки
     input_file = Path("data/confluence_data.json")
     output_dir = Path("data/faiss_index")
-    
+
     # Создаем RAG Builder с выбранным типом разбивки
     rag_builder = RAGBuilder(
         model_name="BAAI/bge-m3",
@@ -58,12 +60,12 @@ async def main():
         use_semantic_chunking=use_semantic,
         similarity_threshold=0.7  # Порог сходства для разделения чанков
     )
-    
+
     # Строим RAG базу
     await rag_builder.build_from_confluence_data(input_file, output_dir)
-    
+
     logger.info(f"🎉 RAG с {chunking_type} разбивкой успешно создан!")
-    
+
     if use_semantic:
         logger.info("📋 Особенности семантической разбивки:")
         logger.info("  ✅ Семантическая разбивка с защитой URL и email")
@@ -75,7 +77,7 @@ async def main():
         logger.info("  ✅ Фиксированный размер чанков")
         logger.info("  ✅ Перекрытие по символам")
         logger.info("  ✅ Быстрая обработка")
-    
+
     logger.info("🔍 Общие улучшения:")
     logger.info("  ✅ Улучшенное форматирование контекста с эмодзи")
     logger.info("  ✅ Метаданные с информацией о типе разбивки")
@@ -83,4 +85,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

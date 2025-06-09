@@ -1,8 +1,9 @@
 """Тесты для модуля конфигурации."""
 
-import pytest
-from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+
 from llamacpp_server.config.settings import Settings
 
 
@@ -13,18 +14,18 @@ def test_settings_default_values():
     }):
         settings = Settings()
         
-        assert settings.n_ctx == 4096
+        assert settings.n_ctx == 8192  # Обновлено
         assert settings.n_batch == 512
         assert settings.host == "0.0.0.0"
         assert settings.port == 8090
-        assert settings.temperature == 0.1
-        assert settings.dev_mode is True
-        
-        # Новые настройки контекста
-        assert settings.max_history_tokens == 1200
-        assert settings.max_response_tokens == 800
-        assert settings.rag_max_context == 1200
-        assert settings.safety_buffer_tokens == 300
+        assert settings.temperature == 0.7  # Обновлено
+        assert settings.max_response_tokens == 2048  # Обновлено
+        assert settings.max_history_tokens == 1024
+        assert settings.rag_max_context == 4048  # Обновлено
+        assert settings.safety_buffer_tokens == 800
+        assert settings.top_p == 0.9  # Обновлено
+        assert settings.enable_rag is True
+        assert settings.rag_search_k == 8  # Обновлено
 
 
 def test_settings_dev_mode():
@@ -42,17 +43,19 @@ def test_settings_env_override():
         'LLAMACPP_DEV_MODE': 'true',  # Отключаем валидацию файла
         'LLAMACPP_HOST': '127.0.0.1',
         'LLAMACPP_PORT': '9000',
-        'LLAMACPP_N_CTX': '6144',
+        'LLAMACPP_N_CTX': '8192',  # Увеличиваем контекст
         'LLAMACPP_MAX_HISTORY_TOKENS': '2000',
-        'LLAMACPP_MAX_RESPONSE_TOKENS': '1000'
+        'LLAMACPP_MAX_RESPONSE_TOKENS': '1000',
+        'LLAMACPP_RAG_MAX_CONTEXT': '3000'  # Уменьшаем RAG контекст
     }):
         settings = Settings()
         
         assert settings.host == "127.0.0.1"
         assert settings.port == 9000
-        assert settings.n_ctx == 6144
+        assert settings.n_ctx == 8192
         assert settings.max_history_tokens == 2000
         assert settings.max_response_tokens == 1000
+        assert settings.rag_max_context == 3000
 
 
 def test_context_distribution_properties():
@@ -66,10 +69,10 @@ def test_context_distribution_properties():
         'LLAMACPP_SAFETY_BUFFER_TOKENS': '300'
     }):
         settings = Settings()
-        
+
         assert settings.available_context_tokens == 3796  # 4096 - 300
         assert settings.effective_history_limit == 1200
-        
+
         dist = settings.context_distribution
         assert dist['total_context'] == 4096
         assert dist['allocated_total'] == 3500  # 1200 + 800 + 1200 + 300
@@ -138,4 +141,4 @@ def test_settings_temperature_validation(invalid_temp):
         'LLAMACPP_TEMPERATURE': str(invalid_temp)
     }):
         with pytest.raises(ValueError):
-            Settings() 
+            Settings()

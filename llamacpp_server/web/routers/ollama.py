@@ -1,17 +1,16 @@
 """Ollama-совместимый API роутер."""
 
-import time
 import os
-from typing import AsyncIterator
+import time
+from collections.abc import AsyncIterator
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from ...config import get_settings
 from ...domain.models import ChatMessage
 from ...domain.protocols import LlamaServiceProtocol
-from ...config import get_settings
-
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -31,10 +30,10 @@ def get_available_model_name() -> str:
 def validate_model_name(requested_model: str) -> bool:
     """Проверить доступность модели."""
     available = get_available_model_name()
-    
+
     # Нормализуем запрошенную модель (убираем теги)
     normalized = requested_model.replace(":latest", "").replace(":stable", "")
-    
+
     # Логируем для отладки
     logger.debug(
         "Валидация модели",
@@ -42,7 +41,7 @@ def validate_model_name(requested_model: str) -> bool:
         normalized=normalized,
         available=available
     )
-    
+
     # Проверяем различные варианты совпадения
     variants = [
         normalized == available,  # Точное совпадение нормализованной
@@ -53,9 +52,9 @@ def validate_model_name(requested_model: str) -> bool:
         available.startswith(normalized),  # Начинается с
         normalized in available,  # Содержится в имени
     ]
-    
+
     result = any(variants)
-    
+
     if not result:
         logger.warning(
             "Модель не прошла валидацию",
@@ -64,7 +63,7 @@ def validate_model_name(requested_model: str) -> bool:
             available=available,
             variants_checked=len(variants)
         )
-    
+
     return result
 
 
@@ -75,7 +74,7 @@ async def ollama_list_models():
     model_name = get_available_model_name()
     # Клиенты автоматически добавляют :latest, поэтому возвращаем сразу с тегом
     model_with_tag = f"{model_name}:latest"
-    
+
     return {
         "models": [
             {
@@ -104,7 +103,7 @@ async def ollama_list_running(
     """Ollama: Список запущенных моделей."""
     settings = get_settings()
     model_name = get_available_model_name()
-    
+
     is_ready = await llama_service.is_ready()
     if is_ready:
         return {
@@ -116,7 +115,7 @@ async def ollama_list_running(
                     "digest": "sha256:dummy",
                     "details": {
                         "parent_model": "",
-                        "format": "gguf", 
+                        "format": "gguf",
                         "family": "llama",
                         "families": ["llama"],
                         "parameter_size": "7B",
@@ -142,14 +141,14 @@ async def ollama_show_model(request_data: dict):
     """Ollama: Информация о модели."""
     settings = get_settings()
     model_name = request_data.get("name", "")
-    
+
     if not validate_model_name(model_name):
         available_model = get_available_model_name()
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model_name}' not found. Available: '{available_model}'"
         )
-    
+
     return {
         "modelfile": f"FROM {settings.model_path}",
         "parameters": f"temperature {settings.temperature}",
@@ -157,7 +156,7 @@ async def ollama_show_model(request_data: dict):
         "details": {
             "parent_model": "",
             "format": "gguf",
-            "family": "llama", 
+            "family": "llama",
             "families": ["llama"],
             "parameter_size": "7B",
             "quantization_level": "Q4_K_M"
@@ -187,20 +186,20 @@ async def ollama_generate(
     model_name = request_data.get("model", "")
     prompt = request_data.get("prompt", "")
     stream = request_data.get("stream", False)
-    
+
     if not validate_model_name(model_name):
         available_model = get_available_model_name()
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model_name}' not found. Available: '{available_model}'"
         )
-    
+
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required")
-    
+
     try:
         from ...domain.models import TextCompletionRequest
-        
+
         completion_request = TextCompletionRequest(
             prompt=prompt,
             model=model_name,
@@ -212,7 +211,7 @@ async def ollama_generate(
             seed=request_data.get("seed", None),
             stream=stream
         )
-        
+
         if stream:
             return StreamingResponse(
                 _ollama_generate_stream(llama_service, completion_request, model_name),
@@ -222,7 +221,7 @@ async def ollama_generate(
         else:
             response = await llama_service.text_completion(completion_request)
             response_text = response.choices[0].text if response.choices else ""
-            
+
             return {
                 "model": model_name,
                 "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
@@ -236,7 +235,7 @@ async def ollama_generate(
                 "eval_count": response.usage.completion_tokens,
                 "eval_duration": 400000000
             }
-        
+
     except Exception as e:
         logger.error("Ошибка Ollama generate", error=str(e))
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
@@ -251,20 +250,20 @@ async def ollama_chat(
     model_name = request_data.get("model", "")
     messages = request_data.get("messages", [])
     stream = request_data.get("stream", False)
-    
+
     if not validate_model_name(model_name):
         available_model = get_available_model_name()
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model_name}' not found. Available: '{available_model}'"
         )
-    
+
     if not messages:
         raise HTTPException(status_code=400, detail="Messages are required")
-    
+
     try:
         from ...domain.models import ChatCompletionRequest
-        
+
         chat_messages = [ChatMessage(**msg) for msg in messages]
         completion_request = ChatCompletionRequest(
             messages=chat_messages,
@@ -277,7 +276,7 @@ async def ollama_chat(
             seed=request_data.get("seed", None),
             stream=stream
         )
-        
+
         if stream:
             return StreamingResponse(
                 _ollama_chat_stream(llama_service, completion_request, model_name),
@@ -287,7 +286,7 @@ async def ollama_chat(
         else:
             response = await llama_service.chat_completion(completion_request)
             response_text = response.choices[0].message.content if response.choices else ""
-            
+
             return {
                 "model": model_name,
                 "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
@@ -304,25 +303,25 @@ async def ollama_chat(
                 "eval_count": response.usage.completion_tokens,
                 "eval_duration": 400000000
             }
-        
+
     except Exception as e:
         logger.error("Ошибка Ollama chat", error=str(e))
         raise HTTPException(status_code=500, detail=f"Chat completion failed: {str(e)}")
 
 
 async def _ollama_generate_stream(
-    llama_service: LlamaServiceProtocol, 
-    request: "TextCompletionRequest", 
+    llama_service: LlamaServiceProtocol,
+    request: "TextCompletionRequest",
     model_name: str
 ) -> AsyncIterator[str]:
     """Стриминг для Ollama generate."""
     import json
-    
+
     async for chunk in llama_service.text_completion_stream(request):
         if "choices" in chunk and chunk["choices"]:
             choice = chunk["choices"][0]
             content = choice.get("text", "") or choice.get("delta", {}).get("content", "")
-            
+
             response_chunk = {
                 "model": model_name,
                 "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
@@ -330,7 +329,7 @@ async def _ollama_generate_stream(
                 "done": False
             }
             yield f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
-    
+
     # Финальный chunk
     final_chunk = {
         "model": model_name,
@@ -348,18 +347,18 @@ async def _ollama_generate_stream(
 
 
 async def _ollama_chat_stream(
-    llama_service: LlamaServiceProtocol, 
-    request: "ChatCompletionRequest", 
+    llama_service: LlamaServiceProtocol,
+    request: "ChatCompletionRequest",
     model_name: str
 ) -> AsyncIterator[str]:
     """Стриминг для Ollama chat."""
     import json
-    
+
     async for chunk in llama_service.chat_completion_stream(request):
         if "choices" in chunk and chunk["choices"]:
             delta = chunk["choices"][0].get("delta", {})
             content = delta.get("content", "")
-            
+
             response_chunk = {
                 "model": model_name,
                 "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
@@ -371,7 +370,7 @@ async def _ollama_chat_stream(
                 "done": False
             }
             yield f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
-    
+
     # Финальный chunk
     final_chunk = {
         "model": model_name,
@@ -389,4 +388,4 @@ async def _ollama_chat_stream(
         "eval_count": 0,
         "eval_duration": 400000000
     }
-    yield f"{json.dumps(final_chunk, ensure_ascii=False)}\n" 
+    yield f"{json.dumps(final_chunk, ensure_ascii=False)}\n"

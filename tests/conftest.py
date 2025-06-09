@@ -1,9 +1,9 @@
 """Конфигурация pytest и общие fixtures."""
 
-import pytest
 import asyncio
-from typing import Generator
-from unittest.mock import patch
+from collections.abc import Generator
+
+import pytest
 
 
 @pytest.fixture(scope="session")
@@ -34,4 +34,4 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers", "slow: mark test as slow running"
-    ) 
+    )

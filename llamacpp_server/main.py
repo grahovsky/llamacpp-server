@@ -1,6 +1,7 @@
 """Главный entry point приложения."""
 
 import uvicorn
+
 from llamacpp_server.config import get_settings
 from llamacpp_server.web import create_app
 
@@ -9,7 +10,7 @@ def main() -> None:
     """Запуск приложения."""
     settings = get_settings()
     app = create_app()
-    
+
     uvicorn.run(
         app,
         host=settings.host,
@@ -19,4 +20,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main() 
+    main()

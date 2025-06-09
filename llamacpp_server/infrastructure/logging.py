@@ -2,17 +2,16 @@
 
 import logging
 import sys
-from typing import Any, Dict
 
 import structlog
 
 
 def setup_logging(log_level: str = "INFO") -> None:
     """Настройка структурированного логирования."""
-    
+
     # Конфигурация timestamper
     timestamper = structlog.processors.TimeStamper(fmt="ISO")
-    
+
     # Конфигурация для красивых логов в dev режиме
     if log_level in ["DEBUG", "INFO"]:
         processors = [
@@ -28,7 +27,7 @@ def setup_logging(log_level: str = "INFO") -> None:
             timestamper,
             structlog.processors.JSONRenderer(),
         ]
-    
+
     # Настройка structlog
     structlog.configure(
         processors=processors,
@@ -38,14 +37,14 @@ def setup_logging(log_level: str = "INFO") -> None:
         logger_factory=structlog.WriteLoggerFactory(file=sys.stdout),
         cache_logger_on_first_use=True,
     )
-    
+
     # Настройка стандартного логгера Python
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=getattr(logging, log_level.upper(), logging.INFO),
     )
-    
+
     # Подавляем слишком болтливые библиотеки
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("llama_cpp").setLevel(logging.WARNING) 
+    logging.getLogger("llama_cpp").setLevel(logging.WARNING)

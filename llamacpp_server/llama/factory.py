@@ -1,8 +1,7 @@
 """Factory для создания LLama инстансов."""
 
+
 import structlog
-from typing import Optional
-from unittest.mock import Mock
 
 try:
     from llama_cpp import Llama
@@ -12,7 +11,6 @@ except ImportError:
     Llama = None
 
 from ..config import Settings
-
 
 logger = structlog.get_logger(__name__)
 
@@ -31,25 +29,24 @@ def _get_cuda_device_count() -> int:
 
 class MockLlama:
     """Mock LLama для разработки."""
-    
+
     def tokenize(self, text: bytes) -> list[int]:
         """Mock токенизация для подсчета токенов."""
         # Простая оценка: 1 токен ≈ 4 символа для латиницы, 2 символа для кириллицы
         text_str = text.decode('utf-8', errors='ignore')
-        
+
         # Подсчитываем символы
         char_count = len(text_str)
-        
+
         # Эмулируем токены (примерно 1 токен на 3-4 символа)
         estimated_tokens = max(1, char_count // 3)
-        
+
         # Возвращаем список фиктивных токенов
         return list(range(estimated_tokens))
-    
+
     def create_completion(self, **kwargs):
         """Mock генерация."""
         if kwargs.get("stream", False):
-            import time
             # Генератор с задержками для реалистичного стриминга
             chunks = [
                 {"choices": [{"delta": {"content": "Это "}, "finish_reason": None}]},
@@ -59,7 +56,7 @@ class MockLlama:
                 {"choices": [{"delta": {"content": "mock "}, "finish_reason": None}]},
                 {"choices": [{"delta": {"content": "модели!"}, "finish_reason": "stop"}]},
             ]
-            
+
             # Возвращаем список чанков, задержка будет в async функции
             return chunks
         else:
@@ -76,7 +73,7 @@ class MockLlama:
                     "total_tokens": 25,
                 },
             }
-    
+
     def create_chat_completion(self, **kwargs):
         """Mock chat completion."""
         if kwargs.get("stream", False):
@@ -119,30 +116,30 @@ class MockLlama:
 
 class LlamaFactory:
     """Factory для создания LLama инстансов."""
-    
+
     @staticmethod
     async def create_llama(settings: Settings):
         """Создать инстанс LLama модели."""
         if settings.dev_mode:
             logger.info("Инициализация mock LLama модели (dev режим)")
             return MockLlama()
-        
+
         if Llama is None:
             raise ImportError("llama-cpp-python не установлен")
-        
+
         logger.info("Инициализация LLama модели", model_path=str(settings.model_path))
-        
+
         # Диагностика GPU поддержки
         try:
             from llama_cpp import llama_cpp
             gpu_support = hasattr(llama_cpp, 'llama_supports_gpu_offload') and llama_cpp.llama_supports_gpu_offload()
-            logger.info("GPU диагностика", 
-                       gpu_support=gpu_support, 
+            logger.info("GPU диагностика",
+                       gpu_support=gpu_support,
                        n_gpu_layers=settings.n_gpu_layers,
                        cuda_device_count=_get_cuda_device_count())
         except Exception as e:
             logger.warning("Ошибка GPU диагностики", error=str(e))
-        
+
         try:
             # Подготавливаем параметры
             llama_params = {
@@ -156,7 +153,7 @@ class LlamaFactory:
                 "chat_format": settings.chat_format,
                 "verbose": settings.verbose,
             }
-            
+
             # Добавляем новые параметры производительности
             if hasattr(settings, 'n_ubatch'):
                 llama_params["n_ubatch"] = settings.n_ubatch
@@ -166,11 +163,11 @@ class LlamaFactory:
                 llama_params["rope_freq_base"] = settings.rope_freq_base
             if hasattr(settings, 'rope_freq_scale'):
                 llama_params["rope_freq_scale"] = settings.rope_freq_scale
-            
+
             # Добавляем GPU параметры если есть GPU поддержка
             if settings.n_gpu_layers > 0:
                 llama_params["main_gpu"] = settings.main_gpu
-                
+
                 # Обработка tensor_split
                 if settings.tensor_split:
                     try:
@@ -179,13 +176,13 @@ class LlamaFactory:
                         logger.info("Настройка tensor_split", tensor_split=tensor_split)
                     except ValueError as e:
                         logger.warning("Неверный формат tensor_split", error=str(e))
-            
+
             llama = Llama(**llama_params)
-            
-            logger.info("LLama модель успешно инициализирована", 
+
+            logger.info("LLama модель успешно инициализирована",
                        n_gpu_layers=settings.n_gpu_layers)
             return llama
-            
+
         except Exception as e:
             logger.error("Ошибка инициализации LLama модели", error=str(e))
-            raise 
+            raise

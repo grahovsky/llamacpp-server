@@ -1,7 +1,7 @@
 """OpenAI compatible API роутер."""
 
 import time
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,7 +13,6 @@ from ...domain.models import (
     TextCompletionRequest,
 )
 from ...domain.protocols import LlamaServiceProtocol
-
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -47,7 +46,7 @@ async def chat_completions(
 ):
     """Chat completions endpoint."""
     logger.info("Получен запрос chat completions", model=request.model, stream=request.stream)
-    
+
     try:
         if request.stream:
             return StreamingResponse(
@@ -57,7 +56,7 @@ async def chat_completions(
         else:
             response = await llama_service.chat_completion(request)
             return response
-            
+
     except Exception as e:
         logger.error("Ошибка обработки chat completion", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -70,7 +69,7 @@ async def text_completions(
 ):
     """Text completions endpoint."""
     logger.info("Получен запрос text completions", model=request.model, stream=request.stream)
-    
+
     try:
         if request.stream:
             return StreamingResponse(
@@ -80,7 +79,7 @@ async def text_completions(
         else:
             response = await llama_service.text_completion(request)
             return response
-            
+
     except Exception as e:
         logger.error("Ошибка обработки text completion", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -101,4 +100,4 @@ async def _stream_text_completion(
     """Стриминг text completion."""
     async for chunk in llama_service.text_completion_stream(request):
         yield f"data: {chunk}\n\n"
-    yield "data: [DONE]\n\n" 
+    yield "data: [DONE]\n\n"

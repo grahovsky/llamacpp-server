@@ -1,13 +1,11 @@
 """Тесты для LlamaService."""
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import AsyncMock, Mock
+
+from llamacpp_server.domain.models import ChatCompletionRequest, ChatMessage, TextCompletionRequest
 from llamacpp_server.llama.service import LlamaService
-from llamacpp_server.domain.models import (
-    ChatCompletionRequest,
-    TextCompletionRequest,
-    ChatMessage
-)
 
 
 @pytest.fixture
@@ -39,15 +37,15 @@ async def test_chat_completion(llama_service, mock_llama):
     }
     # Убираем create_chat_completion чтобы использовался fallback
     delattr(mock_llama, 'create_chat_completion')
-    
+
     request = ChatCompletionRequest(
         model="test-model",
         messages=[ChatMessage(role="user", content="Привет!")]
     )
-    
+
     # Act
     response = await llama_service.chat_completion(request)
-    
+
     # Assert
     assert response.choices[0].text == "Привет! Как дела?"
     assert response.choices[0].finish_reason == "stop"
@@ -64,17 +62,17 @@ async def test_chat_completion_stream(llama_service, mock_llama):
         {"choices": [{"delta": {"content": "вет!"}, "finish_reason": "stop"}]}
     ]
     mock_llama.create_completion.return_value = mock_stream
-    
+
     request = ChatCompletionRequest(
         model="test-model",
         messages=[ChatMessage(role="user", content="Привет!")]
     )
-    
+
     # Act
     chunks = []
     async for chunk in llama_service.chat_completion_stream(request):
         chunks.append(chunk)
-    
+
     # Assert
     assert len(chunks) == 2
     assert chunks[0]["choices"][0]["delta"]["content"] == "При"
@@ -96,15 +94,15 @@ async def test_text_completion(llama_service, mock_llama):
             "total_tokens": 9
         }
     }
-    
+
     request = TextCompletionRequest(
         model="test-model",
         prompt="Напиши текст:"
     )
-    
+
     # Act
     response = await llama_service.text_completion(request)
-    
+
     # Assert
     assert response.choices[0].text == "Это тестовый ответ"
     assert response.usage.total_tokens == 9
@@ -123,8 +121,8 @@ def test_format_chat_messages(llama_service):
         ChatMessage(role="user", content="Привет"),
         ChatMessage(role="assistant", content="Привет!")
     ]
-    
+
     formatted = llama_service._format_chat_messages(messages)
-    
+
     expected = "System: Ты помощник\nUser: Привет\nAssistant: Привет!\nAssistant: "
-    assert formatted == expected 
+    assert formatted == expected
