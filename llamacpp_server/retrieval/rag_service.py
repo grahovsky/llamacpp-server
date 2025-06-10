@@ -6,7 +6,7 @@ from typing import Any
 import structlog
 
 from ..config.settings import get_settings
-from ..prompts.templates import get_prompt_template
+from ..prompts.service import PromptService
 from .protocols import EmbeddingServiceProtocol, VectorStoreProtocol
 
 logger = structlog.get_logger(__name__)
@@ -18,18 +18,23 @@ class RAGService:
     def __init__(
         self,
         embedding_service: EmbeddingServiceProtocol,
-        vector_store: VectorStoreProtocol
+        vector_store: VectorStoreProtocol,
+        settings = None
     ) -> None:
         self._embedding_service = embedding_service
         self._vector_store = vector_store
-        settings = get_settings()
+        
+        # Если настройки не переданы, получаем их (для обратной совместимости)
+        if settings is None:
+            settings = get_settings()
+            
+        self._settings = settings
         self._index_path = Path(settings.faiss_index_path)
         self._search_k = settings.rag_search_k
         self._max_context_length = settings.rag_max_context
 
-        # Получаем шаблон промпта на основе типа модели
-        self._model_type = settings.get_model_type()
-        self._prompt_template = get_prompt_template(self._model_type)
+        # Инициализируем сервис промптов
+        self._prompt_template = PromptService(settings)
 
         # Инициализируем компоненты
         self._embedding_model = None
@@ -37,8 +42,7 @@ class RAGService:
         self._documents = []
 
         logger.info("RAG сервис инициализирован",
-                   max_context_length=self._max_context_length,
-                   model_type=self._model_type)
+                   max_context_length=self._max_context_length)
 
     async def create_rag_prompt(self, user_query: str) -> str:
         """Создать RAG промпт для любого пользовательского запроса (новый метод для RAG-only)."""
@@ -55,8 +59,8 @@ class RAGService:
                 context_text = "\n\n".join(context_docs)
                 logger.info("✅ Контекст найден", docs_count=len(context_docs))
 
-            # Создаем RAG промпт используя новый шаблон
-            rag_prompt = self._prompt_template.format_rag_prompt(
+            # Создаем RAG промпт
+            rag_prompt = await self._prompt_template.create_rag_prompt(
                 query=user_query,
                 context=context_docs
             )
@@ -71,7 +75,7 @@ class RAGService:
         except Exception as e:
             logger.error("❌ Ошибка создания RAG промпта", error=str(e), exc_info=True)
             # Fallback: возвращаем промпт с пустым контекстом
-            return self._prompt_template.format_rag_prompt(
+            return await self._prompt_template.create_rag_prompt(
                 query=user_query,
                 context=["Ошибка поиска в документации."]
             )
@@ -87,8 +91,8 @@ class RAGService:
         # Объединяем контекст с разделителями
         context_text = "\n\n".join(context)
 
-        # Используем шаблон на основе типа модели
-        enhanced_prompt = self._prompt_template.format_rag_prompt(
+        # Используем шаблон для создания RAG промпта
+        enhanced_prompt = await self._prompt_template.create_rag_prompt(
             query=original_prompt,
             context=context
         )
@@ -96,8 +100,7 @@ class RAGService:
         logger.debug("Промпт улучшен контекстом",
                     original_len=len(original_prompt),
                     enhanced_len=len(enhanced_prompt),
-                    context_docs=len(context),
-                    model_type=self._model_type)
+                    context_docs=len(context))
 
         # Детальное логирование для диагностики
         logger.debug("🔍 RAG Enhanced Prompt Preview",

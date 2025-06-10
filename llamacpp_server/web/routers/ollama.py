@@ -216,11 +216,22 @@ async def ollama_generate(
             return StreamingResponse(
                 _ollama_generate_stream(llama_service, completion_request, model_name),
                 media_type="application/x-ndjson",
-                headers={"Content-Type": "application/x-ndjson; charset=utf-8"}
+                headers={
+                    "Content-Type": "application/x-ndjson; charset=utf-8",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "X-Accel-Buffering": "no"  # Отключаем буферизацию nginx
+                }
             )
         else:
             response = await llama_service.text_completion(completion_request)
             response_text = response.choices[0].text if response.choices else ""
+
+            # Проверяем, что ответ не пустой
+            if not response_text.strip():
+                logger.warning("Пустой ответ для ollama generate", model=model_name, prompt=prompt[:100])
+                response_text = "Извините, не смог сгенерировать ответ. Попробуйте переформулировать запрос."
 
             return {
                 "model": model_name,
@@ -230,14 +241,14 @@ async def ollama_generate(
                 "context": [],
                 "total_duration": 1000000000,
                 "load_duration": 100000000,
-                "prompt_eval_count": response.usage.prompt_tokens,
+                "prompt_eval_count": response.usage.prompt_tokens if response.usage else 0,
                 "prompt_eval_duration": 500000000,
-                "eval_count": response.usage.completion_tokens,
+                "eval_count": response.usage.completion_tokens if response.usage else 0,
                 "eval_duration": 400000000
             }
 
     except Exception as e:
-        logger.error("Ошибка Ollama generate", error=str(e))
+        logger.error("Ошибка Ollama generate", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
 
@@ -250,6 +261,12 @@ async def ollama_chat(
     model_name = request_data.get("model", "")
     messages = request_data.get("messages", [])
     stream = request_data.get("stream", False)
+
+    logger.info("🔍 Входящий запрос ollama chat", 
+                model=model_name, 
+                messages_count=len(messages),
+                stream=stream,
+                first_message=messages[0] if messages else None)
 
     if not validate_model_name(model_name):
         available_model = get_available_model_name()
@@ -281,13 +298,27 @@ async def ollama_chat(
             return StreamingResponse(
                 _ollama_chat_stream(llama_service, completion_request, model_name),
                 media_type="application/x-ndjson",
-                headers={"Content-Type": "application/x-ndjson; charset=utf-8"}
+                headers={
+                    "Content-Type": "application/x-ndjson; charset=utf-8",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "X-Accel-Buffering": "no"  # Отключаем буферизацию nginx
+                }
             )
         else:
+            logger.info("🧠 Запрос не-стриминг чат генерации", model=model_name)
             response = await llama_service.chat_completion(completion_request)
             response_text = response.choices[0].message.content if response.choices else ""
 
-            return {
+            # Проверяем, что ответ не пустой
+            if not response_text or not response_text.strip():
+                logger.warning("⚠️ Пустой ответ для ollama chat", 
+                             model=model_name, 
+                             messages_preview=str(messages)[:200])
+                response_text = "Извините, не смог сгенерировать ответ на ваш запрос. Попробуйте переформулировать вопрос."
+
+            result = {
                 "model": model_name,
                 "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
                 "message": {
@@ -298,14 +329,20 @@ async def ollama_chat(
                 "done": True,
                 "total_duration": 1000000000,
                 "load_duration": 100000000,
-                "prompt_eval_count": response.usage.prompt_tokens,
+                "prompt_eval_count": response.usage.prompt_tokens if response.usage else 0,
                 "prompt_eval_duration": 500000000,
-                "eval_count": response.usage.completion_tokens,
+                "eval_count": response.usage.completion_tokens if response.usage else 0,
                 "eval_duration": 400000000
             }
 
+            logger.info("✅ Ollama chat ответ готов", 
+                       content_length=len(response_text),
+                       preview=response_text[:100])
+            
+            return result
+
     except Exception as e:
-        logger.error("Ошибка Ollama chat", error=str(e))
+        logger.error("❌ Ошибка Ollama chat", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Chat completion failed: {str(e)}")
 
 
@@ -317,33 +354,59 @@ async def _ollama_generate_stream(
     """Стриминг для Ollama generate."""
     import json
 
-    async for chunk in llama_service.text_completion_stream(request):
-        if "choices" in chunk and chunk["choices"]:
-            choice = chunk["choices"][0]
-            content = choice.get("text", "") or choice.get("delta", {}).get("content", "")
+    logger.info("🔄 Запуск ollama generate stream", model=model_name)
+    
+    try:
+        chunk_count = 0
+        total_content = ""
+        
+        async for chunk in llama_service.text_completion_stream(request):
+            chunk_count += 1
+            
+            if "choices" in chunk and chunk["choices"]:
+                choice = chunk["choices"][0]
+                content = choice.get("text", "") or choice.get("delta", {}).get("content", "")
+                
+                if content:  # Отправляем только если есть контент
+                    total_content += content
+                    response_chunk = {
+                        "model": model_name,
+                        "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
+                        "response": content,
+                        "done": False
+                    }
+                    yield f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
 
-            response_chunk = {
-                "model": model_name,
-                "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
-                "response": content,
-                "done": False
-            }
-            yield f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
-
-    # Финальный chunk
-    final_chunk = {
-        "model": model_name,
-        "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
-        "response": "",
-        "done": True,
-        "total_duration": 1000000000,
-        "load_duration": 100000000,
-        "prompt_eval_count": 0,
-        "prompt_eval_duration": 500000000,
-        "eval_count": 0,
-        "eval_duration": 400000000
-    }
-    yield f"{json.dumps(final_chunk, ensure_ascii=False)}\n"
+        # Финальный chunk
+        final_chunk = {
+            "model": model_name,
+            "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
+            "response": "",
+            "done": True,
+            "total_duration": 1000000000,
+            "load_duration": 100000000,
+            "prompt_eval_count": 0,
+            "prompt_eval_duration": 500000000,
+            "eval_count": 0,
+            "eval_duration": 400000000
+        }
+        yield f"{json.dumps(final_chunk, ensure_ascii=False)}\n"
+        
+        logger.info("✅ Ollama generate stream завершен", 
+                   chunks=chunk_count, 
+                   total_length=len(total_content))
+        
+    except Exception as e:
+        logger.error("❌ Ошибка ollama generate stream", error=str(e), exc_info=True)
+        # Отправляем ошибку в формате Ollama
+        error_chunk = {
+            "model": model_name,
+            "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
+            "response": f"Ошибка генерации: {str(e)}",
+            "done": True,
+            "error": str(e)
+        }
+        yield f"{json.dumps(error_chunk, ensure_ascii=False)}\n"
 
 
 async def _ollama_chat_stream(
@@ -354,38 +417,76 @@ async def _ollama_chat_stream(
     """Стриминг для Ollama chat."""
     import json
 
-    async for chunk in llama_service.chat_completion_stream(request):
-        if "choices" in chunk and chunk["choices"]:
-            delta = chunk["choices"][0].get("delta", {})
-            content = delta.get("content", "")
+    logger.info("🔄 Запуск ollama chat stream", model=model_name)
+    
+    try:
+        chunk_count = 0
+        total_content = ""
+        
+        logger.info("🔄 Начинаем итерацию по chat_completion_stream")
+        
+        async for chunk in llama_service.chat_completion_stream(request):
+            chunk_count += 1
+            logger.info(f"📦 Получен chunk #{chunk_count}", chunk_keys=list(chunk.keys()) if chunk else None)
+            
+            if "choices" in chunk and chunk["choices"]:
+                delta = chunk["choices"][0].get("delta", {})
+                content = delta.get("content", "")
+                logger.info(f"💬 Content из chunk: {repr(content)}")
 
-            response_chunk = {
-                "model": model_name,
-                "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                    "images": None
-                },
-                "done": False
-            }
-            yield f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
+                if content:  # Отправляем только если есть контент
+                    total_content += content
+                    response_chunk = {
+                        "model": model_name,
+                        "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
+                        "message": {
+                            "role": "assistant",
+                            "content": content,
+                            "images": None
+                        },
+                        "done": False
+                    }
+                    chunk_json = f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
+                    logger.info(f"📤 Отправляем chunk: {chunk_json[:100]}...")
+                    yield chunk_json
 
-    # Финальный chunk
-    final_chunk = {
-        "model": model_name,
-        "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
-        "message": {
-            "role": "assistant",
-            "content": "",
-            "images": None
-        },
-        "done": True,
-        "total_duration": 1000000000,
-        "load_duration": 100000000,
-        "prompt_eval_count": 0,
-        "prompt_eval_duration": 500000000,
-        "eval_count": 0,
-        "eval_duration": 400000000
-    }
-    yield f"{json.dumps(final_chunk, ensure_ascii=False)}\n"
+        # Финальный chunk
+        final_chunk = {
+            "model": model_name,
+            "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "images": None
+            },
+            "done": True,
+            "total_duration": 1000000000,
+            "load_duration": 100000000,
+            "prompt_eval_count": 0,
+            "prompt_eval_duration": 500000000,
+            "eval_count": 0,
+            "eval_duration": 400000000
+        }
+        final_json = f"{json.dumps(final_chunk, ensure_ascii=False)}\n"
+        logger.info("📤 Отправляем финальный chunk")
+        yield final_json
+        
+        logger.info("✅ Ollama chat stream завершен", 
+                   chunks=chunk_count, 
+                   total_length=len(total_content))
+        
+    except Exception as e:
+        logger.error("❌ Ошибка ollama chat stream", error=str(e), exc_info=True)
+        # Отправляем ошибку в формате Ollama
+        error_chunk = {
+            "model": model_name,
+            "created_at": f"{time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())}",
+            "message": {
+                "role": "assistant",
+                "content": f"Ошибка генерации: {str(e)}",
+                "images": None
+            },
+            "done": True,
+            "error": str(e)
+        }
+        yield f"{json.dumps(error_chunk, ensure_ascii=False)}\n"

@@ -14,9 +14,14 @@ logger = structlog.get_logger(__name__)
 class EmbeddingService:
     """Сервис для создания эмбеддингов с BGE-M3."""
 
-    def __init__(self) -> None:
+    def __init__(self, settings = None) -> None:
         self._model: SentenceTransformer = None
-        settings = get_settings()
+        
+        # Если настройки не переданы, получаем их (для обратной совместимости)
+        if settings is None:
+            settings = get_settings()
+            
+        self._settings = settings
         self._model_name = settings.embedding_model
         self._device = settings.get_embedding_device()
 

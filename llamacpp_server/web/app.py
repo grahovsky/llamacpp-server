@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ..infrastructure import Container, setup_logging
-from .routers import fallback, health, ollama, openai, webui
+from .routers import debug, fallback, health, ollama, openai, webui
 
 logger = structlog.get_logger(__name__)
 
@@ -82,7 +82,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS middleware
+    # CORS middleware (оставляем только это)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -108,6 +108,7 @@ def create_app() -> FastAPI:
 
     # Подключаем роутеры (порядок важен!)
     app.include_router(health.router, prefix="/health", tags=["health"])
+    app.include_router(debug.router, prefix="/debug", tags=["debug"])
     app.include_router(openai.router, prefix="/v1", tags=["openai"])
     app.include_router(ollama.router, prefix="/ollama", tags=["ollama"])
     app.include_router(webui.router, tags=["webui"])

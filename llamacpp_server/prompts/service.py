@@ -1,79 +1,60 @@
-"""Сервис для работы с промптами."""
-
+"""Сервис для работы с промптами в RAG-only системе."""
 
 import structlog
 
 from ..config.settings import get_settings
-from ..domain.models import ChatMessage
-from .templates import get_prompt_template
 
 logger = structlog.get_logger(__name__)
 
 
 class PromptService:
-    """Сервис для работы с промптами."""
+    """Сервис для работы с промптами в RAG-only системе."""
 
-    def __init__(self) -> None:
+    def __init__(self, settings=None) -> None:
         """Инициализация сервиса промптов."""
-        settings = get_settings()
-        self._model_type = settings.get_model_type()
-        self._prompt_template = get_prompt_template(self._model_type)
-        
-        logger.info("Промпт сервис инициализирован", model_type=self._model_type)
+        if settings is None:
+            settings = get_settings()
 
-    async def get_system_prompt(self, prompt_type: str = "default") -> str:
-        """Получить системный промпт."""
-        logger.debug("Получение системного промпта", prompt_type=prompt_type)
-        
-        # Базовый системный промпт для RAG
-        default_system_prompt = (
-            "Ты — ассистент, который помогает отвечать на вопросы на основе предоставленной документации. "
-            "Используй только информацию из контекста для ответа. "
-            "Если информации недостаточно, так и скажи."
+        self._settings = settings
+        logger.info("RAG Промпт сервис инициализирован")
+
+    async def get_system_prompt(self) -> str:
+        """Получить системный промпт для RAG."""
+        logger.debug("Получение системного RAG промпта")
+
+        return (
+            "Ты помощник для ответов на вопросы на основе предоставленной документации.\n\n"
+            "Правила:\n"
+            "- Отвечай на русском языке точно и развернуто\n"
+            "- Используй только информацию из предоставленного контекста\n"
+            "- НЕ выдумывай информацию, которой нет в документах\n"
+            "- Если в документах нет ответа, скажи \"Информация не найдена в документации\"\n"
+            "- НЕ повторяйся и НЕ продолжай диалог\n"
+            "- Выводи ссылки (page_url) в конце ответа в разделе \"Источники:\" \n"
         )
-        
-        return default_system_prompt
+            # "- Отвечай только на заданный вопрос, не добавляй лишнего"
 
-    async def format_chat_prompt(
-        self, messages: list[ChatMessage], system_message: str = ""
-    ) -> str:
-        """Форматировать промпт для чата."""
-        logger.debug("Форматирование промпта", 
-                    model_type=self._model_type, 
-                    messages_count=len(messages))
-
-        # Конвертируем ChatMessage в словари
-        message_dicts = []
-        for msg in messages:
-            message_dicts.append({
-                "role": msg.role,
-                "content": msg.content
-            })
-
-        # Используем шаблон на основе типа модели
-        return self._prompt_template.format_chat_prompt(
-            messages=message_dicts,
-            system_message=system_message
-        )
-
-    async def create_conversation_prompt(
-        self, messages: list[ChatMessage], system_message: str = ""
-    ) -> str:
-        """Создать промпт для многооборотной беседы."""
-        logger.debug("Создание промпта для беседы", model_type=self._model_type)
-        
-        # Используем тот же метод что и для чата
-        return await self.format_chat_prompt(messages, system_message)
-
-    async def format_rag_prompt(self, query: str, context: list[str], system_message: str = "") -> str:
-        """Форматировать RAG промпт."""
-        logger.debug("Форматирование RAG промпта", 
-                    model_type=self._model_type,
+    async def create_rag_prompt(self, query: str, context: list[str]) -> str:
+        """Создать структурированный RAG промпт для Llama 3.1."""
+        logger.debug("Создание RAG промпта",
                     query_len=len(query),
                     context_docs=len(context))
-        
-        return self._prompt_template.format_rag_prompt(
-            query=query,
-            context=context,
-            system_message=system_message
-        )
+
+        # Получаем системный промпт
+        system_prompt = await self.get_system_prompt()
+
+        context_text = "\n\n".join(context) if context else "Контекст не найден."
+
+        # Используем структуру Llama 3.1 с четким разделением ролей
+        prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Контекст из документации:
+{context_text}
+
+Вопрос: {query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
+
+        return prompt

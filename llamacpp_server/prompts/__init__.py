@@ -1,6 +1,5 @@
-"""Модуль для работы с промптами."""
+"""Модуль для работы с RAG промптами."""
 
 from .service import PromptService
-from .templates import get_prompt_template, PromptTemplateFactory
 
-__all__ = ["PromptService", "get_prompt_template", "PromptTemplateFactory"]
+__all__ = ["PromptService"]

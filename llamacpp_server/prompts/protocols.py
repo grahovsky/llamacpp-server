@@ -1,15 +1,15 @@
-"""Протоколы для Prompt сервисов."""
+"""Протоколы для RAG Prompt сервисов."""
 
 from typing import Protocol
 
 
 class PromptServiceProtocol(Protocol):
-    """Протокол для сервиса работы с промптами."""
+    """Протокол для RAG сервиса работы с промптами."""
 
-    def get_system_prompt(self) -> str:
-        """Получить системный промпт."""
+    async def get_system_prompt(self) -> str:
+        """Получить системный промпт для RAG."""
         ...
 
-    def create_rag_prompt(self, query: str, context: str) -> str:
-        """Создать RAG промпт."""
-        ... 
+    async def create_rag_prompt(self, query: str, context: list[str]) -> str:
+        """Создать RAG промпт с контекстом и вопросом."""
+        ...

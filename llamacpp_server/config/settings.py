@@ -2,10 +2,27 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Dict, Any
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+
+class RAGDefaults:
+    """Дефолтные параметры для RAG-only системы."""
+    
+    # === RAG параметры (единственные в системе) ===
+    TEMPERATURE = 0.5 
+    TOP_K = 40
+    TOP_P = 0.9
+    REPEAT_PENALTY = 1.1      
+    MAX_TOKENS = 2048          
+    SEED = -1
+    
+    # === Только для заголовков ===
+    TITLE_TEMPERATURE = 0.2
+    TITLE_REPEAT_PENALTY = 1.1  
+    TITLE_MAX_TOKENS = 50  
 
 
 class Settings(BaseSettings):
@@ -35,15 +52,16 @@ class Settings(BaseSettings):
 
     # === Управление контекстом и токенами ===
     # Формула: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer
-    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 2048
+    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = RAGDefaults.MAX_TOKENS
     max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 0
-    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2048
+    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2024
     safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 300
 
-    # === Параметры генерации ===
-    top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = 40
-    top_p: Annotated[float, Field(ge=0.0, le=1.0, description="Top-P (nucleus) sampling")] = 0.9
-    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = 1.2
+    # === Параметры генерации (RAG дефолты) ===
+    top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = RAGDefaults.TOP_K
+    top_p: Annotated[float, Field(ge=0.0, le=1.0, description="Top-P (nucleus) sampling")] = RAGDefaults.TOP_P
+    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = RAGDefaults.REPEAT_PENALTY
+    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = RAGDefaults.TEMPERATURE
 
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"
@@ -54,10 +72,9 @@ class Settings(BaseSettings):
     use_mmap: Annotated[bool, Field(description="Использовать memory mapping")] = True
     use_mlock: Annotated[bool, Field(description="Использовать memory locking")] = False
     chat_format: Annotated[str | None, Field(description="Формат чата (None = автоопределение)")] = None
-    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = 0.7
 
     # === Логирование ===
-    log_level: Annotated[str, Field(description="Уровень логирования")] = "DEBUG"
+    log_level: Annotated[str, Field(description="Уровень логирования")] = "INFO"
 
     # === Режим разработки ===
     dev_mode: Annotated[bool, Field(description="Режим разработки (без модели)")] = False
@@ -79,12 +96,12 @@ class Settings(BaseSettings):
         frozen=True  # Нельзя изменить
     )
     rag_search_k: int = Field(
-        5,
+        15,
         description="Количество документов для поиска в RAG"
     )
 
     # === Глобальная настройка устройства вычислений ===
-    compute_device: Annotated[str, Field(description="Устройство для вычислений (cpu, cuda, auto)")] = "auto"
+    compute_device: Annotated[str, Field(description="Устройство для вычислений (cpu, cuda, auto)")] = "cuda"
     force_cpu_embedding: Annotated[bool, Field(description="Принудительно использовать CPU для embedding моделей")] = True
 
     # === Тип модели и шаблоны промптов ===
@@ -96,6 +113,83 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
     }
+
+    # === RAG Request Builder Methods ===
+    def build_rag_params(
+        self, 
+        is_title: bool = False,
+        **overrides: Any
+    ) -> Dict[str, Any]:
+        """
+        Создает параметры для RAG запроса (единственный тип в системе).
+        
+        Args:
+            is_title: True для генерации заголовков
+            **overrides: Пользовательские переопределения параметров
+            
+        Returns:
+            Словарь параметров для LLM
+        """
+        if is_title:
+            # Специальные параметры для заголовков
+            params = {
+                "temperature": RAGDefaults.TITLE_TEMPERATURE,
+                "repeat_penalty": RAGDefaults.TITLE_REPEAT_PENALTY, 
+                "max_tokens": RAGDefaults.TITLE_MAX_TOKENS,
+                "top_k": self.top_k,
+                "top_p": self.top_p,
+                "seed": RAGDefaults.SEED,
+            }
+        else:
+            # Стандартные RAG параметры
+            params = {
+                "temperature": self.temperature,
+                "repeat_penalty": self.repeat_penalty,
+                "max_tokens": RAGDefaults.MAX_TOKENS,
+                "top_k": self.top_k,
+                "top_p": self.top_p,
+                "seed": RAGDefaults.SEED,
+            }
+        
+        # Применяем пользовательские переопределения
+        params.update(overrides)
+        
+        return params
+
+    def merge_request_params(self, user_request, is_title: bool = False) -> Dict[str, Any]:
+        """
+        Объединяет пользовательские параметры с RAG дефолтами.
+        
+        Args:
+            user_request: Объект запроса пользователя с параметрами
+            is_title: True для генерации заголовков
+            
+        Returns:
+            Финальные параметры для LLM
+        """
+        # Получаем базовые RAG параметры
+        base_params = self.build_rag_params(is_title)
+        
+        # Создаем словарь пользовательских параметров (только не-None)
+        user_overrides = {}
+        
+        if hasattr(user_request, 'temperature') and user_request.temperature is not None:
+            user_overrides['temperature'] = user_request.temperature
+        if hasattr(user_request, 'top_k') and user_request.top_k is not None:
+            user_overrides['top_k'] = user_request.top_k
+        if hasattr(user_request, 'top_p') and user_request.top_p is not None:
+            user_overrides['top_p'] = user_request.top_p
+        if hasattr(user_request, 'repeat_penalty') and user_request.repeat_penalty is not None:
+            user_overrides['repeat_penalty'] = user_request.repeat_penalty
+        if hasattr(user_request, 'max_tokens') and user_request.max_tokens is not None:
+            user_overrides['max_tokens'] = user_request.max_tokens
+        if hasattr(user_request, 'seed') and user_request.seed is not None:
+            user_overrides['seed'] = user_request.seed
+            
+        # Объединяем базовые параметры с пользовательскими
+        base_params.update(user_overrides)
+        
+        return base_params
 
     @field_validator("model_path")
     @classmethod
@@ -217,6 +311,7 @@ class Settings(BaseSettings):
     def _is_cuda_available(self) -> bool:
         """Проверить доступность CUDA."""
         try:
+            # Ленивый импорт torch только когда нужна диагностика
             import torch
             return torch.cuda.is_available()
         except ImportError:
@@ -229,6 +324,7 @@ class Settings(BaseSettings):
     def device_info(self) -> dict:
         """Информация об устройствах для диагностики."""
         try:
+            # Ленивый импорт torch только когда нужна диагностика
             import torch
             cuda_available = torch.cuda.is_available()
             cuda_device_count = torch.cuda.device_count() if cuda_available else 0

@@ -18,11 +18,16 @@ logger = structlog.get_logger(__name__)
 class FaissVectorStore:
     """FAISS векторное хранилище с async интерфейсом."""
 
-    def __init__(self) -> None:
+    def __init__(self, settings = None) -> None:
         self._index: faiss.Index = None
         self._documents: dict[int, Document] = {}
         self._dimension: int = 1024  # BGE-M3 dimension
-        settings = get_settings()
+        
+        # Если настройки не переданы, получаем их (для обратной совместимости)
+        if settings is None:
+            settings = get_settings()
+            
+        self._settings = settings
         self._index_dir = Path(settings.faiss_index_path)
 
     async def _ensure_index_loaded(self) -> None:
