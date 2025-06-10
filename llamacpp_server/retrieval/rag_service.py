@@ -6,7 +6,7 @@ from typing import Any
 import structlog
 
 from ..config.settings import get_settings
-from ..prompts.templates import RAG_TEMPLATES
+from ..prompts.templates import RAG_TEMPLATES, RAG_TEMPLATE
 from .protocols import EmbeddingServiceProtocol, VectorStoreProtocol
 
 logger = structlog.get_logger(__name__)
@@ -34,6 +34,42 @@ class RAGService:
 
         logger.info("RAG сервис инициализирован",
                    max_context_length=self._max_context_length)
+
+    async def create_rag_prompt(self, user_query: str) -> str:
+        """Создать RAG промпт для любого пользовательского запроса (новый метод для RAG-only)."""
+        logger.info("🧠 Создание RAG промпта", query_preview=user_query[:100])
+
+        try:
+            # Ищем релевантный контекст
+            context_docs = await self.search_relevant_context(user_query, k=self._search_k)
+            
+            if not context_docs:
+                logger.warning("⚠️ Контекст не найден, используем пустой контекст")
+                context_text = "Релевантная документация не найдена."
+            else:
+                context_text = "\n\n".join(context_docs)
+                logger.info("✅ Контекст найден", docs_count=len(context_docs))
+
+            # Создаем RAG промпт используя новый шаблон
+            rag_prompt = RAG_TEMPLATE.format(
+                context=context_text,
+                question=user_query
+            )
+
+            logger.debug("RAG промпт создан",
+                        original_len=len(user_query),
+                        rag_len=len(rag_prompt),
+                        context_docs=len(context_docs))
+
+            return rag_prompt
+
+        except Exception as e:
+            logger.error("❌ Ошибка создания RAG промпта", error=str(e), exc_info=True)
+            # Fallback: возвращаем промпт с пустым контекстом
+            return RAG_TEMPLATE.format(
+                context="Ошибка поиска в документации.",
+                question=user_query
+            )
 
     async def enhance_prompt_with_context(
         self, original_prompt: str, context: list[str]

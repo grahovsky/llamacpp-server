@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # === Режим разработки ===
     dev_mode: Annotated[bool, Field(description="Режим разработки (без модели)")] = False
 
-    # === RAG настройки ===
+    # === RAG настройки (обязательные для RAG-only системы) ===
     embedding_model: str = Field(
         "BAAI/bge-m3",
         description="Модель для создания эмбеддингов"
@@ -72,12 +72,14 @@ class Settings(BaseSettings):
         description="Путь к FAISS индексу"
     )
 
+    # RAG всегда включен в RAG-only системе
     enable_rag: bool = Field(
         True,
-        description="Включить RAG для всех запросов"
+        description="RAG всегда включен (RAG-only система)",
+        frozen=True  # Нельзя изменить
     )
     rag_search_k: int = Field(
-        8,  # Уменьшено для оптимизации
+        8,
         description="Количество документов для поиска в RAG"
     )
 

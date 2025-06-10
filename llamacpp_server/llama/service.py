@@ -1,4 +1,4 @@
-"""Сервис для работы с LLama.cpp."""
+"""Сервис для работы с LLama.cpp в RAG-only режиме."""
 
 import time
 import uuid
@@ -17,13 +17,14 @@ from ..domain.models import (
     Usage,
 )
 from ..retrieval.protocols import RAGServiceProtocol
+from ..prompts.templates import SYSTEM_PROMPT
 from .history_manager import ChatHistoryManager
 
 logger = structlog.get_logger(__name__)
 
 
 class LlamaService:
-    """Сервис для работы с LLama моделью."""
+    """Сервис для работы с LLama моделью в RAG-only режиме."""
 
     def __init__(
         self,
@@ -34,601 +35,430 @@ class LlamaService:
         self._llama = llama
         self._rag_service = rag_service
         settings = get_settings()
-        self._enable_rag = settings.enable_rag and rag_service is not None
-        self._rag_search_k = settings.rag_search_k
+        
+        if not rag_service:
+            raise ValueError("RAG сервис обязателен для RAG-only системы")
+        
         self.history_manager = ChatHistoryManager(
             llama_model=llama,
             max_tokens=settings.max_history_tokens,
             reserve_tokens=settings.max_response_tokens
         )
-
-    @staticmethod
-    def _is_technical_request(query: str) -> bool:
-        """Определяет технические запросы от open-webui."""
-        if not query:
-            return False
-
-        # Более строгие паттерны для технических запросов
-        technical_patterns = [
-            "### task:",
-            "generate a concise",
-            "generate 1-3 broad tags",
-            "summarizing the chat history",
-            "categorizing the main themes",
-            "json format:",
-            '"title":',
-            '"tags":',
-            "chat history:",
-            "<chat_history>",
-            "### guidelines:",
-            "### output:",
-            "3-5 word title",
-            "broad tags categorizing",
-            "main themes of the chat",
-            "chat's primary language",
-            "your entire response must consist solely",
-            "raw json object",
-        ]
-
-        query_lower = query.lower()
-
-        # Если запрос содержит технические паттерны
-        has_technical_patterns = any(pattern in query_lower for pattern in technical_patterns)
-
-        # Дополнительная проверка: если запрос начинается с ### - это технический
-        starts_with_task = query_lower.strip().startswith("###")
-
-        # Проверка на JSON структуру
-        has_json_structure = '"title":' in query_lower or '"tags":' in query_lower
-
-        return has_technical_patterns or starts_with_task or has_json_structure
+        
+        logger.info("LlamaService инициализирован в RAG-only режиме")
 
     async def chat_completion(self, request: ChatCompletionRequest) -> CompletionResponse:
-        """Генерация chat completion с RAG поддержкой."""
-        logger.info("Обработка chat completion запроса",
-                   model=request.model,
-                   rag_enabled=self._enable_rag)
+        """Генерация chat completion с обязательным RAG."""
+        logger.info("🧠 RAG-only chat completion", model=request.model)
 
-        # Извлекаем последний пользовательский запрос для анализа
-        user_query = ""
-        for msg in reversed(request.messages):
-            if msg.role == "user":
-                user_query = msg.content
-                break
+        # Извлекаем последний пользовательский запрос
+        user_query = self._extract_user_query(request.messages)
+        
+        if not user_query:
+            logger.warning("Нет пользовательского запроса")
+            return self._create_error_response("Не найден пользовательский запрос")
 
-        # Проверяем тип запроса
-        is_technical = self._is_technical_request(user_query)
+        logger.info("Обработка запроса", query_preview=user_query[:100])
 
-        # Логируем тип запроса
-        if user_query:
-            logger.info("🔍 ТИП ЗАПРОСА",
-                       is_technical=is_technical,
-                       query_preview=user_query[:100])
+        try:
+            # Создаем RAG промпт для любого запроса
+            rag_prompt = await self._rag_service.create_rag_prompt(user_query)
+            
+            # Создаем новые сообщения с системным промптом и RAG промптом
+            rag_messages = [
+                ChatMessage(role="system", content=SYSTEM_PROMPT),
+                ChatMessage(role="user", content=rag_prompt)
+            ]
 
-        # Добавляем системный промпт только для обычных пользовательских запросов
-        has_system_message = any(msg.role == "system" for msg in request.messages)
-        if not has_system_message and not is_technical:
-            from ..prompts.templates import SYSTEM_PROMPTS
-            system_message = ChatMessage(
-                role="system",
-                content=SYSTEM_PROMPTS["default"]
-            )
-            # Добавляем системное сообщение в начало
-            request.messages.insert(0, system_message)
-            logger.info("✅ Добавлен системный промпт для RAG",
-                       prompt_type="default")
-
-        # Если включен RAG и есть пользовательский запрос (не технический)
-        if self._enable_rag and user_query and not is_technical:
-            logger.info("🧠 RAG обработка запроса",
-                       query_preview=user_query[:100],
-                       rag_service_available=self._rag_service is not None)
-
-            try:
-                # Выбираем метод поиска и формирования промпта
-                context = None
-                enhanced_query = None
-
-                if self._enable_rag:
-                    logger.info("🎯 Используем citation-focused RAG")
-                    context = await self._rag_service.search_relevant_context(
-                        user_query, k=self._rag_search_k
-                    )
-
-                # Создаем промпт если есть контекст (независимо от типа поиска)
-                if context:
-                    logger.info("📚 RAG контекст найден", context_docs=len(context))
-                    enhanced_query = await self._rag_service.enhance_prompt_with_context(
-                        user_query, context
-                    )
-
-                # Если получили улучшенный запрос, обновляем сообщения
-                if enhanced_query:
-                    # Создаем новый список сообщений с улучшенным запросом
-                    enhanced_messages = []
-                    for msg in request.messages:
-                        if msg.role == "user" and msg.content == user_query:
-                            # Заменяем последний пользовательский запрос
-                            enhanced_messages.append(
-                                ChatMessage(role="user", content=enhanced_query)
-                            )
-                        else:
-                            enhanced_messages.append(msg)
-
-                    # Обновляем запрос
-                    request = ChatCompletionRequest(
-                        messages=enhanced_messages,
-                        model=request.model,
-                        max_tokens=request.max_tokens,
-                        temperature=request.temperature,
-                        top_p=request.top_p,
-                        top_k=request.top_k,
-                        repeat_penalty=request.repeat_penalty,
-                        seed=request.seed,
-                        stream=request.stream
-                    )
-
-                    logger.info("✅ RAG промпт обновлен",
-                               original_length=len(user_query),
-                               enhanced_length=len(enhanced_query),
-                               context_docs=len(context) if context else 0)
-                else:
-                    logger.warning("⚠️ RAG контекст не найден")
-
-            except Exception as e:
-                logger.error("❌ Ошибка RAG обработки", error=str(e), exc_info=True)
-        elif not self._enable_rag:
-            logger.debug("RAG отключен в настройках")
-        else:
-            logger.debug("Нет пользовательского запроса для RAG")
-
-        # Подготавливаем сообщения с учетом лимитов контекста
-        messages_dict = [msg.dict() for msg in request.messages]
-
-        # Логируем исходные сообщения для диагностики
-        logger.info("🔍 ИСХОДНЫЕ СООБЩЕНИЯ ДЛЯ LLM",
-                   messages_count=len(messages_dict),
-                   messages_summary=[{
-                       "role": msg.get("role", "unknown"),
-                       "content_length": len(str(msg.get("content", "")))
-                   } for msg in messages_dict])
-
-        # Логируем полное содержимое последнего сообщения если это RAG (без технических)
-        if messages_dict and self._enable_rag and not is_technical:
-            last_msg = messages_dict[-1]
-            logger.debug("🔍 ПОСЛЕДНЕЕ СООБЩЕНИЕ С RAG (ПОЛНОЕ)",
-                       role=last_msg.get("role", "unknown"),
-                       full_content=last_msg.get("content", ""))
-
-        trimmed_messages = self.history_manager.prepare_messages_for_completion(messages_dict)
-
-        # Логируем результат обрезки
-        logger.info("🔍 СООБЩЕНИЯ ПОСЛЕ ОБРЕЗКИ",
-                   original_count=len(messages_dict),
-                   trimmed_count=len(trimmed_messages),
-                   trimmed_summary=[{
-                       "role": msg.get("role", "unknown"),
-                       "content_length": len(str(msg.get("content", "")))
-                   } for msg in trimmed_messages])
-
-        # Генерируем ответ
-        if hasattr(self._llama, 'create_chat_completion'):
-            # Используем chat completion если доступен
-            logger.info("🔍 Используем chat_completion для генерации", messages_count=len(trimmed_messages))
-            response = self._llama.create_chat_completion(
-                messages=trimmed_messages,
+            # Создаем новый запрос с RAG сообщениями
+            rag_request = ChatCompletionRequest(
+                messages=rag_messages,
+                model=request.model,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
                 top_k=request.top_k,
                 repeat_penalty=request.repeat_penalty,
                 seed=request.seed,
-                stream=False,
-            )
-        else:
-            # Fallback на обычную генерацию с форматированием
-            formatted_prompt = self._format_chat_messages([
-                ChatMessage(**msg) for msg in trimmed_messages
-            ])
-            logger.info("🔍 Fallback на formatted prompt", prompt_length=len(formatted_prompt))
-            response = self._llama.create_completion(
-                prompt=formatted_prompt,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                top_k=request.top_k,
-                repeat_penalty=request.repeat_penalty,
-                seed=request.seed,
-                stream=False,
+                stream=request.stream
             )
 
-        # Формируем ответ в OpenAI формате
-        return self._create_completion_response(response, request.model, "chat.completion")
+            logger.info("✅ RAG промпт создан", 
+                       original_len=len(user_query),
+                       rag_len=len(rag_prompt))
+
+            # Обрабатываем запрос
+            return await self._process_completion(rag_request)
+
+        except Exception as e:
+            logger.error("❌ Ошибка RAG обработки", error=str(e), exc_info=True)
+            return self._create_error_response(f"Ошибка обработки: {str(e)}")
 
     async def chat_completion_stream(
         self, request: ChatCompletionRequest
     ) -> AsyncIterator[dict]:
-        """Стриминг chat completion с RAG поддержкой."""
-        logger.info("Обработка streaming chat completion запроса",
-                   model=request.model,
-                   rag_enabled=self._enable_rag)
+        """Стриминг chat completion с обязательным RAG."""
+        logger.info("🧠 RAG-only streaming chat completion", model=request.model)
 
-        # Извлекаем последний пользовательский запрос для анализа
-        user_query = ""
-        for msg in reversed(request.messages):
-            if msg.role == "user":
-                user_query = msg.content
-                break
+        # Извлекаем пользовательский запрос
+        user_query = self._extract_user_query(request.messages)
+        
+        if not user_query:
+            logger.warning("Нет пользовательского запроса для стриминга")
+            yield self._create_stream_error("Не найден пользовательский запрос")
+            return
 
-        # Проверяем тип запроса для streaming
-        is_technical = self._is_technical_request(user_query)
+        try:
+            # Создаем RAG промпт
+            rag_prompt = await self._rag_service.create_rag_prompt(user_query)
+            
+            # Создаем RAG сообщения
+            rag_messages = [
+                ChatMessage(role="system", content=SYSTEM_PROMPT),
+                ChatMessage(role="user", content=rag_prompt)
+            ]
 
-        # Логируем тип запроса
-        if user_query:
-            logger.info("🔍 STREAMING ТИП ЗАПРОСА",
-                       is_technical=is_technical,
-                       query_preview=user_query[:100])
-
-        # Добавляем системный промпт только для обычных пользовательских запросов
-        has_system_message = any(msg.role == "system" for msg in request.messages)
-        if not has_system_message and not is_technical:
-            from ..prompts.templates import SYSTEM_PROMPTS
-            system_message = ChatMessage(
-                role="system",
-                content=SYSTEM_PROMPTS["default"]
+            # Создаем RAG запрос
+            rag_request = ChatCompletionRequest(
+                messages=rag_messages,
+                model=request.model,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                repeat_penalty=request.repeat_penalty,
+                seed=request.seed,
+                stream=True
             )
-            # Добавляем системное сообщение в начало
-            request.messages.insert(0, system_message)
-            logger.info("✅ Добавлен системный промпт для RAG streaming",
-                       prompt_type="default")
 
-        # Если включен RAG и есть пользовательский запрос (не технический)
-        if self._enable_rag and user_query and not is_technical:
-            logger.info("🧠 RAG обработка streaming запроса")
+            logger.info("✅ RAG стриминг промпт создан")
 
-            try:
-                # Выбираем метод поиска и формирования промпта для streaming
-                context = None
-                enhanced_query = None
+            # Стримим ответ
+            async for chunk in self._process_completion_stream(rag_request):
+                yield chunk
 
-                if self._enable_rag:
-                    logger.info("🎯 Используем citation-focused RAG для streaming")
-                    context = await self._rag_service.search_relevant_context(
-                        user_query, k=self._rag_search_k
-                    )
+        except Exception as e:
+            logger.error("❌ Ошибка RAG стриминга", error=str(e), exc_info=True)
+            yield self._create_stream_error(f"Ошибка обработки: {str(e)}")
 
-                # Создаем промпт если есть контекст (независимо от типа поиска)
-                if context:
-                    logger.info("📚 RAG контекст для streaming найден", context_docs=len(context))
-                    enhanced_query = await self._rag_service.enhance_prompt_with_context(
-                        user_query, context
-                    )
+    async def text_completion(self, request: TextCompletionRequest) -> CompletionResponse:
+        """Text completion с обязательным RAG."""
+        logger.info("🧠 RAG-only text completion", model=request.model)
 
-                # Если получили улучшенный запрос, обновляем сообщения
-                if enhanced_query:
-                    # Создаем новый список сообщений с улучшенным запросом
-                    enhanced_messages = []
-                    for msg in request.messages:
-                        if msg.role == "user" and msg.content == user_query:
-                            # Заменяем последний пользовательский запрос
-                            enhanced_messages.append(
-                                ChatMessage(role="user", content=enhanced_query)
-                            )
-                        else:
-                            enhanced_messages.append(msg)
+        if not request.prompt:
+            return self._create_error_response("Пустой промпт")
 
-                    # Обновляем запрос
-                    request = ChatCompletionRequest(
-                        messages=enhanced_messages,
-                        model=request.model,
-                        max_tokens=request.max_tokens,
-                        temperature=request.temperature,
-                        top_p=request.top_p,
-                        top_k=request.top_k,
-                        repeat_penalty=request.repeat_penalty,
-                        seed=request.seed,
-                        stream=request.stream
-                    )
+        try:
+            # Создаем RAG промпт
+            rag_prompt = await self._rag_service.create_rag_prompt(request.prompt)
+            
+            # Создаем RAG запрос
+            rag_request = TextCompletionRequest(
+                prompt=rag_prompt,
+                model=request.model,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                repeat_penalty=request.repeat_penalty,
+                seed=request.seed,
+                stream=request.stream
+            )
 
-                    logger.info("✅ RAG промпт обновлен для streaming", context_docs=len(context) if context else 0)
+            logger.info("✅ RAG text completion промпт создан")
 
-            except Exception as e:
-                logger.error("❌ Ошибка RAG обработки в streaming", error=str(e))
+            # Обрабатываем запрос
+            return await self._process_text_completion(rag_request)
 
-        # Подготавливаем сообщения с учетом лимитов контекста
-        messages_dict = [msg.dict() for msg in request.messages]
+        except Exception as e:
+            logger.error("❌ Ошибка RAG text completion", error=str(e), exc_info=True)
+            return self._create_error_response(f"Ошибка обработки: {str(e)}")
 
-        # Логируем для streaming тоже (но короче)
-        logger.info("🔍 STREAMING: исходные сообщения",
-                   messages_count=len(messages_dict))
+    async def text_completion_stream(
+        self, request: TextCompletionRequest
+    ) -> AsyncIterator[dict]:
+        """Стриминг text completion с обязательным RAG."""
+        logger.info("🧠 RAG-only streaming text completion", model=request.model)
 
-        if messages_dict and self._enable_rag:
-            last_msg = messages_dict[-1]
-            logger.info("🔍 STREAMING: RAG сообщение длина",
-                       content_length=len(str(last_msg.get("content", ""))))
+        if not request.prompt:
+            yield self._create_stream_error("Пустой промпт")
+            return
 
-        trimmed_messages = self.history_manager.prepare_messages_for_completion(messages_dict)
+        try:
+            # Создаем RAG промпт
+            rag_prompt = await self._rag_service.create_rag_prompt(request.prompt)
+            
+            # Создаем RAG запрос
+            rag_request = TextCompletionRequest(
+                prompt=rag_prompt,
+                model=request.model,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                repeat_penalty=request.repeat_penalty,
+                seed=request.seed,
+                stream=True
+            )
 
-        logger.info("🔍 STREAMING: после обрезки",
-                   original_count=len(messages_dict),
-                   trimmed_count=len(trimmed_messages))
+            logger.info("✅ RAG streaming text completion промпт создан")
 
-        logger.info("🔍 STREAMING: готов к генерации",
-                   messages_count=len(trimmed_messages))
+            # Стримим ответ
+            async for chunk in self._process_text_completion_stream(rag_request):
+                yield chunk
 
-        # Запускаем в thread pool чтобы не блокировать event loop
-        import asyncio
-        import concurrent.futures
+        except Exception as e:
+            logger.error("❌ Ошибка RAG text completion стриминга", error=str(e), exc_info=True)
+            yield self._create_stream_error(f"Ошибка обработки: {str(e)}")
+
+    def _extract_user_query(self, messages: list[ChatMessage]) -> str:
+        """Извлечь последний пользовательский запрос."""
+        for msg in reversed(messages):
+            if msg.role == "user" and msg.content.strip():
+                return msg.content.strip()
+        return ""
+
+    async def _process_completion(self, request: ChatCompletionRequest) -> CompletionResponse:
+        """Обработка completion запроса."""
+        # Форматируем для llama.cpp
+        formatted_prompt = self._format_chat_messages(request.messages)
+        
+        logger.debug("Отправка в LLM", prompt_len=len(formatted_prompt))
+
+        # Генерируем ответ
+        response = self._llama.create_completion(
+            prompt=formatted_prompt,
+            max_tokens=request.max_tokens or 1024,
+            temperature=request.temperature or 0.7,
+            top_p=request.top_p or 0.9,
+            top_k=request.top_k or 40,
+            repeat_penalty=request.repeat_penalty or 1.1,
+            seed=request.seed or -1,
+            stream=False,
+        )
+
+        return self._create_completion_response(response, request.model, "chat.completion")
+
+    async def _process_completion_stream(self, request: ChatCompletionRequest) -> AsyncIterator[dict]:
+        """Обработка streaming completion запроса."""
+        formatted_prompt = self._format_chat_messages(request.messages)
+        
+        logger.debug("Отправка streaming в LLM", prompt_len=len(formatted_prompt))
 
         def create_stream():
-            # Используем chat_completion для стриминга тоже
-            if hasattr(self._llama, 'create_chat_completion'):
-                return self._llama.create_chat_completion(
-                    messages=trimmed_messages,
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    top_p=request.top_p,
-                    top_k=request.top_k,
-                    repeat_penalty=request.repeat_penalty,
-                    seed=request.seed,
-                    stream=True,
-                )
-            else:
-                # Fallback на форматированный промпт
-                formatted_prompt = self._format_chat_messages([
-                    ChatMessage(**msg) for msg in trimmed_messages
-                ])
-                return self._llama.create_completion(
-                    prompt=formatted_prompt,
-                    max_tokens=request.max_tokens,
-                    temperature=request.temperature,
-                    top_p=request.top_p,
-                    top_k=request.top_k,
-                    repeat_penalty=request.repeat_penalty,
-                    seed=request.seed,
-                    stream=True,
-                )
-
-        # Обрабатываем stream в executor
-        loop = asyncio.get_event_loop()
+            return self._llama.create_completion(
+                prompt=formatted_prompt,
+                max_tokens=request.max_tokens or 1024,
+                temperature=request.temperature or 0.7,
+                top_p=request.top_p or 0.9,
+                top_k=request.top_k or 40,
+                repeat_penalty=request.repeat_penalty or 1.1,
+                seed=request.seed or -1,
+                stream=True,
+            )
 
         async def process_stream():
-            # Получаем stream
             stream = create_stream()
-
-            # Если это list (mock), обрабатываем с задержками
-            if isinstance(stream, list):
-                for chunk in stream:
-                    await asyncio.sleep(0.2)  # Эмулируем задержку генерации
-
-                    # Приводим к стандартному формату
-                    if "choices" in chunk and chunk["choices"]:
-                        choice = chunk["choices"][0]
-                        if "delta" in choice and choice["delta"]:
-                            yield chunk
-                        elif "text" in choice:
+            
+            for chunk in stream:
+                if chunk and "choices" in chunk and chunk["choices"]:
+                    choice = chunk["choices"][0]
+                    if "delta" in choice and "content" in choice["delta"]:
+                        content = choice["delta"]["content"]
+                        if content:
                             yield {
-                                "choices": [{
-                                    "delta": {"content": choice["text"]},
-                                    "finish_reason": choice.get("finish_reason")
-                                }]
+                                "id": f"chatcmpl-{uuid.uuid4()}",
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": request.model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"content": content},
+                                        "finish_reason": None,
+                                    }
+                                ],
                             }
-                        else:
-                            yield chunk
-                    else:
-                        yield chunk
-            else:
-                # Реальный stream от llama.cpp
-                def get_next_chunk(stream_iter):
-                    try:
-                        return next(stream_iter)
-                    except StopIteration:
-                        return None
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    stream_iter = iter(stream)
-
-                    while True:
-                        # Получаем следующий чанк в thread pool
-                        chunk = await loop.run_in_executor(executor, get_next_chunk, stream_iter)
-
-                        if chunk is None:
-                            break
-
-                        # Приводим к стандартному формату
-                        if "choices" in chunk and chunk["choices"]:
-                            choice = chunk["choices"][0]
-                            if "delta" in choice and choice["delta"]:
-                                yield chunk
-                            elif "text" in choice:
-                                yield {
-                                    "choices": [{
-                                        "delta": {"content": choice["text"]},
-                                        "finish_reason": choice.get("finish_reason")
-                                    }]
+                    
+                    if choice.get("finish_reason"):
+                        yield {
+                            "id": f"chatcmpl-{uuid.uuid4()}",
+                            "object": "chat.completion.chunk",
+                            "created": int(time.time()),
+                            "model": request.model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": choice["finish_reason"],
                                 }
-                            else:
-                                yield chunk
-                        else:
-                            yield chunk
+                            ],
+                        }
 
         async for chunk in process_stream():
             yield chunk
 
-    async def text_completion(self, request: TextCompletionRequest) -> CompletionResponse:
-        """Генерация text completion."""
-        logger.info("Обработка text completion запроса", model=request.model)
+    async def _process_text_completion(self, request: TextCompletionRequest) -> CompletionResponse:
+        """Обработка text completion запроса."""
+        logger.debug("Отправка text completion в LLM", prompt_len=len(request.prompt))
 
         response = self._llama.create_completion(
             prompt=request.prompt,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            repeat_penalty=request.repeat_penalty,
-            seed=request.seed,
+            max_tokens=request.max_tokens or 1024,
+            temperature=request.temperature or 0.7,
+            top_p=request.top_p or 0.9,
+            top_k=request.top_k or 40,
+            repeat_penalty=request.repeat_penalty or 1.1,
+            seed=request.seed or -1,
             stream=False,
         )
 
         return self._create_completion_response(response, request.model, "text_completion")
 
-    async def text_completion_stream(
-        self, request: TextCompletionRequest
-    ) -> AsyncIterator[dict]:
-        """Стриминг text completion."""
-        logger.info("Обработка streaming text completion запроса", model=request.model)
-
-        # Запускаем в thread pool чтобы не блокировать event loop
-        import asyncio
-        import concurrent.futures
+    async def _process_text_completion_stream(self, request: TextCompletionRequest) -> AsyncIterator[dict]:
+        """Обработка streaming text completion запроса."""
+        logger.debug("Отправка streaming text completion в LLM", prompt_len=len(request.prompt))
 
         def create_stream():
             return self._llama.create_completion(
                 prompt=request.prompt,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-                top_p=request.top_p,
-                top_k=request.top_k,
-                repeat_penalty=request.repeat_penalty,
-                seed=request.seed,
+                max_tokens=request.max_tokens or 1024,
+                temperature=request.temperature or 0.7,
+                top_p=request.top_p or 0.9,
+                top_k=request.top_k or 40,
+                repeat_penalty=request.repeat_penalty or 1.1,
+                seed=request.seed or -1,
                 stream=True,
             )
 
-        # Обрабатываем stream в executor
-        loop = asyncio.get_event_loop()
-
         async def process_stream():
-            # Получаем stream
             stream = create_stream()
-
-            # Если это list (mock), обрабатываем с задержками
-            if isinstance(stream, list):
-                for chunk in stream:
-                    await asyncio.sleep(0.2)  # Эмулируем задержку генерации
-
-                    # Стандартизируем формат чанков
-                    if "choices" in chunk and chunk["choices"]:
-                        choice = chunk["choices"][0]
-                        if "delta" in choice and choice["delta"]:
-                            yield chunk
-                        elif "text" in choice:
+            
+            for chunk in stream:
+                if chunk and "choices" in chunk and chunk["choices"]:
+                    choice = chunk["choices"][0]
+                    if "text" in choice:
+                        text = choice["text"]
+                        if text:
                             yield {
-                                "choices": [{
-                                    "delta": {"content": choice["text"]},
-                                    "finish_reason": choice.get("finish_reason"),
-                                    "text": choice["text"]
-                                }]
+                                "id": f"cmpl-{uuid.uuid4()}",
+                                "object": "text_completion",
+                                "created": int(time.time()),
+                                "model": request.model,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "text": text,
+                                        "finish_reason": None,
+                                    }
+                                ],
                             }
-                        else:
-                            yield chunk
-                    else:
-                        yield chunk
-            else:
-                # Реальный stream от llama.cpp
-                def get_next_chunk(stream_iter):
-                    try:
-                        return next(stream_iter)
-                    except StopIteration:
-                        return None
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    stream_iter = iter(stream)
-
-                    while True:
-                        # Получаем следующий чанк в thread pool
-                        chunk = await loop.run_in_executor(executor, get_next_chunk, stream_iter)
-
-                        if chunk is None:
-                            break
-
-                        # Стандартизируем формат чанков
-                        if "choices" in chunk and chunk["choices"]:
-                            choice = chunk["choices"][0]
-                            if "delta" in choice and choice["delta"]:
-                                yield chunk
-                            elif "text" in choice:
-                                yield {
-                                    "choices": [{
-                                        "delta": {"content": choice["text"]},
-                                        "finish_reason": choice.get("finish_reason"),
-                                        "text": choice["text"]
-                                    }]
+                    
+                    if choice.get("finish_reason"):
+                        yield {
+                            "id": f"cmpl-{uuid.uuid4()}",
+                            "object": "text_completion",
+                            "created": int(time.time()),
+                            "model": request.model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "text": "",
+                                    "finish_reason": choice["finish_reason"],
                                 }
-                            else:
-                                yield chunk
-                        else:
-                            yield chunk
+                            ],
+                        }
 
         async for chunk in process_stream():
             yield chunk
 
     async def is_ready(self) -> bool:
-        """Проверка готовности модели."""
-        return True  # LLama модель готова после инициализации
+        """Проверка готовности сервиса."""
+        return self._llama is not None and self._rag_service is not None
 
     def _format_chat_messages(self, messages: list[ChatMessage]) -> str:
-        """Форматирование сообщений в промпт (fallback для старых моделей без chat_completion)."""
-        # Убираем <s> - llama.cpp добавляет автоматически
-        formatted = ""
-        system_content = ""
-        user_content = ""
-
-        # Собираем системный промпт и пользовательский контент
-        for msg in messages:
-            if msg.role == "system":
-                system_content = msg.content
-            elif msg.role == "user":
-                user_content = msg.content
-            elif msg.role == "assistant":
-                # Для истории диалога (пока не используем)
-                pass
-
-        # Формат Mistral без <s> (llama.cpp добавит сам)
-        if system_content and user_content:
-            formatted = f"[INST] <<SYS>>\n{system_content}\n<</SYS>>\n\n{user_content} [/INST]"
-        elif user_content:
-            formatted = f"[INST] {user_content} [/INST]"
-
-        return formatted
+        """Форматирование сообщений для llama.cpp."""
+        formatted_parts = []
+        
+        for message in messages:
+            role = message.role
+            content = message.content
+            
+            if role == "system":
+                formatted_parts.append(f"System: {content}")
+            elif role == "user":
+                formatted_parts.append(f"User: {content}")
+            elif role == "assistant":
+                formatted_parts.append(f"Assistant: {content}")
+        
+        formatted_parts.append("Assistant:")
+        return "\n\n".join(formatted_parts)
 
     def _create_completion_response(
         self, response: dict, model: str, object_type: str
     ) -> CompletionResponse:
-        """Создание ответа в OpenAI формате."""
-        choice = response["choices"][0]
+        """Создание ответа completion."""
+        if not response or "choices" not in response:
+            return self._create_error_response("Пустой ответ от модели")
 
-        # Обработка разных типов ответов
-        if object_type == "chat.completion" and "message" in choice:
-            # Chat completion ответ
-            message_content = choice["message"]["content"]
-            choice_obj = Choice(
-                index=0,
-                message=ChatMessage(role="assistant", content=message_content),
-                finish_reason=choice.get("finish_reason", "stop"),
-            )
+        choice_data = response["choices"][0]
+        
+        # Определяем контент в зависимости от типа
+        if object_type == "chat.completion":
+            content = choice_data.get("message", {}).get("content", "")
         else:
-            # Text completion ответ
-            text_content = choice.get("text", "")
-            choice_obj = Choice(
-                index=0,
-                text=text_content,
-                message=(
-                    ChatMessage(role="assistant", content=text_content)
-                    if object_type == "chat.completion"
-                    else None
-                ),
-                finish_reason=choice.get("finish_reason", "stop"),
-            )
+            content = choice_data.get("text", "")
+
+        choice = Choice(
+            index=0,
+            message=ChatMessage(role="assistant", content=content),
+            finish_reason=choice_data.get("finish_reason", "stop"),
+        )
+
+        usage = Usage(
+            prompt_tokens=response.get("usage", {}).get("prompt_tokens", 0),
+            completion_tokens=response.get("usage", {}).get("completion_tokens", 0),
+            total_tokens=response.get("usage", {}).get("total_tokens", 0),
+        )
 
         return CompletionResponse(
-            id=f"cmpl-{uuid.uuid4().hex}",
+            id=f"chatcmpl-{uuid.uuid4()}",
             object=object_type,
             created=int(time.time()),
             model=model,
-            choices=[choice_obj],
-            usage=Usage(
-                prompt_tokens=response["usage"]["prompt_tokens"],
-                completion_tokens=response["usage"]["completion_tokens"],
-                total_tokens=response["usage"]["total_tokens"],
-            ),
+            choices=[choice],
+            usage=usage,
         )
+
+    def _create_error_response(self, error_message: str) -> CompletionResponse:
+        """Создание ответа с ошибкой."""
+        choice = Choice(
+            index=0,
+            message=ChatMessage(role="assistant", content=f"Ошибка: {error_message}"),
+            finish_reason="stop",
+        )
+
+        return CompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4()}",
+            object="chat.completion",
+            created=int(time.time()),
+            model="llama-cpp",
+            choices=[choice],
+            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        )
+
+    def _create_stream_error(self, error_message: str) -> dict:
+        """Создание streaming ошибки."""
+        return {
+            "id": f"chatcmpl-{uuid.uuid4()}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "llama-cpp",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": f"Ошибка: {error_message}"},
+                    "finish_reason": "stop",
+                }
+            ],
+        } 
