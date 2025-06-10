@@ -115,16 +115,19 @@ class RAGBuilder:
         self.embedding_model.to(device)
         logger.info("✅ Модель эмбеддингов загружена на CPU")
 
-        # Инициализируем семантический разбивщик
+        # Инициализируем семантический разбивщик с современными техниками
         if self.use_semantic_chunking:
             self.semantic_chunker = SemanticChunker(
                 embedding_model=self.embedding_model,
                 max_chunk_size=self.chunk_size,
                 min_chunk_size=100,
                 similarity_threshold=self.similarity_threshold,
-                overlap_sentences=2
+                overlap_sentences=2,
+                window_size=3,              # Скользящее окно для анализа связности
+                adaptive_threshold=True,    # Адаптивный порог на основе статистики
+                hierarchical_chunking=True  # Иерархическая разбивка больших документов
             )
-            logger.info("✅ Семантический разбивщик инициализирован")
+            logger.info("✅ Продвинутый семантический разбивщик инициализирован с новыми техниками")
 
         # Обрабатываем документы
         documents = await self._process_documents(confluence_data)

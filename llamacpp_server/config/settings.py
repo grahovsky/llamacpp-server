@@ -13,16 +13,17 @@ class Settings(BaseSettings):
 
     # === Модель ===
     model_path: Annotated[Path, Field(description="Путь к файлу модели GGUF")] = Path(
-        "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+        "models/llama-3.1-8b-q4_k_m.gguf",
+        #"models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         #"models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
         # "models/llama2:7b.gguf"
     )
 
     # === Параметры модели ===
-    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 8192
-    n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
+    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 4096
+    n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 64
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
-    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
+    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 0
     main_gpu: Annotated[int, Field(ge=0, description="Основная GPU для вычислений")] = 0
     tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
 
@@ -34,10 +35,10 @@ class Settings(BaseSettings):
 
     # === Управление контекстом и токенами ===
     # Формула: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer
-    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 2048
-    max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 1024
-    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 4048
-    safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 800
+    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 1024
+    max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 0
+    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2048
+    safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 300
 
     # === Параметры генерации ===
     top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = 40

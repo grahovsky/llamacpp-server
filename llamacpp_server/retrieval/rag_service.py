@@ -1,6 +1,7 @@
 """RAG сервис для контекстного поиска."""
 
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -82,59 +83,40 @@ class RAGService:
                 logger.warning("❌ Не найдено релевантных документов")
                 return []
 
-            # Форматируем контекст с особым акцентом на источники
+            # Простое форматирование - используем контент как есть
             context_docs = []
             total_length = 0
             unique_sources = set()
 
             for _, result in enumerate(search_results):
                 document = result.document
-                content = document.content
+                content = document.content  # Используем контент как есть (уже с контекстом)
                 metadata = document.metadata
-
+                
                 title = metadata.get('title', 'Без названия')
                 source_url = metadata.get('source', '')
-
-                # Усиленный формат для цитирования
+                
+                # Собираем уникальные источники для логирования
                 if source_url:
                     unique_sources.add((title, source_url))
-                    formatted_doc = f"""Документ: {title}
-URL: {source_url}
-Содержание: {content}
-
-"""
-                else:
-                    formatted_doc = f"""Документ: {title}
-URL: [источник неизвестен]
-Содержание: {content}
-
-"""
 
                 # Проверяем лимит длины
-                if total_length + len(formatted_doc) > self._max_context_length:
+                if total_length + len(content) > self._max_context_length:
                     remaining = self._max_context_length - total_length
-                    if remaining > 150:  # Минимальный размер для полезного контента
-                        # Сохраняем важные части
-                        header = f"Документ: {title}\nURL: {source_url}\n"
-                        footer = "\n\n"
-                        content_space = remaining - len(header) - len(footer) - len('Содержание: ') - 20
-
-                        if content_space > 80:
-                            truncated_content = content[:content_space] + "...[ОБРЕЗАНО]"
-                            formatted_doc = f'{header}Содержание: {truncated_content}{footer}'
-
-                            context_docs.append(formatted_doc)
-                            total_length += len(formatted_doc)
-                            if source_url:
-                                unique_sources.add((title, source_url))
+                    if remaining > 100:  # Минимальный размер для полезного контента
+                        truncated_content = content[:remaining-20] + "...[ОБРЕЗАНО]"
+                        context_docs.append(truncated_content)
+                        total_length += len(truncated_content)
+                        if source_url:
+                            unique_sources.add((title, source_url))
                     break
 
-                context_docs.append(formatted_doc)
-                total_length += len(formatted_doc)
+                context_docs.append(content)
+                total_length += len(content)
 
             sources_list = [f"{title} - {url}" for title, url in unique_sources]
 
-            logger.info("✅ RAG контекст с цитированием готов",
+            logger.info("✅ RAG контекст готов",
                        documents=len(context_docs),
                        total_chars=total_length,
                        unique_sources=len(sources_list),
@@ -145,3 +127,100 @@ URL: [источник неизвестен]
         except Exception as e:
             logger.error("❌ Ошибка RAG поиска с цитированием", error=str(e), exc_info=True)
             return []
+
+    async def batch_add_documents(
+        self, 
+        documents: list, 
+        batch_size: int = 50,
+        show_progress: bool = True
+    ) -> dict[str, Any]:
+        """Добавить документы батчами с прогресс-индикатором."""
+        logger.info("📦 Начинаем массовое добавление документов",
+                   total_docs=len(documents),
+                   batch_size=batch_size)
+
+        if not documents:
+            return {"success": False, "error": "Нет документов для добавления"}
+
+        try:
+            # Статистика процесса
+            stats = {
+                "total_docs": len(documents),
+                "processed_docs": 0,
+                "failed_docs": 0,
+                "batches_processed": 0,
+                "total_batches": (len(documents) + batch_size - 1) // batch_size,
+                "embeddings_created": 0,
+                "errors": []
+            }
+
+            # Обрабатываем документы батчами
+            for i in range(0, len(documents), batch_size):
+                batch_docs = documents[i:i + batch_size]
+                batch_num = stats["batches_processed"] + 1
+                
+                if show_progress:
+                    logger.info(f"🔄 Обработка батча {batch_num}/{stats['total_batches']}",
+                               docs_in_batch=len(batch_docs))
+
+                try:
+                    # Создаем эмбеддинги для батча
+                    batch_embeddings = []
+                    for doc in batch_docs:
+                        try:
+                            embedding = await self._embedding_service.embed_text(doc.content)
+                            doc.embedding = embedding
+                            batch_embeddings.append(embedding)
+                            stats["embeddings_created"] += 1
+                        except Exception as e:
+                            logger.error("Ошибка создания эмбеддинга", 
+                                       doc_id=getattr(doc, 'id', 'unknown'),
+                                       error=str(e))
+                            stats["failed_docs"] += 1
+                            stats["errors"].append(f"Embedding error for doc {getattr(doc, 'id', 'unknown')}: {str(e)}")
+                            continue
+
+                    # Добавляем документы с эмбеддингами в векторное хранилище
+                    valid_docs = [doc for doc in batch_docs if hasattr(doc, 'embedding') and doc.embedding is not None]
+                    
+                    if valid_docs:
+                        await self._vector_store.add_documents(valid_docs, batch_size=len(valid_docs))
+                        stats["processed_docs"] += len(valid_docs)
+                    
+                    stats["batches_processed"] += 1
+
+                    if show_progress:
+                        progress_pct = (stats["processed_docs"] / stats["total_docs"]) * 100
+                        logger.info(f"✅ Батч {batch_num} завершен",
+                                   progress=f"{progress_pct:.1f}%",
+                                   processed=stats["processed_docs"],
+                                   total=stats["total_docs"])
+
+                except Exception as e:
+                    logger.error(f"Ошибка обработки батча {batch_num}", error=str(e))
+                    stats["errors"].append(f"Batch {batch_num} error: {str(e)}")
+                    stats["failed_docs"] += len(batch_docs)
+
+            # Финальная статистика
+            success_rate = (stats["processed_docs"] / stats["total_docs"]) * 100 if stats["total_docs"] > 0 else 0
+            
+            logger.info("🎉 Массовое добавление завершено",
+                       total_docs=stats["total_docs"],
+                       processed=stats["processed_docs"],
+                       failed=stats["failed_docs"],
+                       success_rate=f"{success_rate:.1f}%",
+                       embeddings_created=stats["embeddings_created"])
+
+            return {
+                "success": True,
+                "stats": stats,
+                "success_rate": success_rate
+            }
+
+        except Exception as e:
+            logger.error("❌ Критическая ошибка массового добавления", error=str(e), exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "stats": stats if 'stats' in locals() else {}
+            }

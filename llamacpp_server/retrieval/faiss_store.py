@@ -34,9 +34,6 @@ class FaissVectorStore:
             possible_files = [
                 # Наш новый формат (приоритет)
                 (self._index_dir / "index.faiss", self._index_dir / "documents.json"),
-                # Стандартный FAISS формат
-                (self._index_dir / "index.faiss", self._index_dir / "index.pkl"),
-                (self._index_dir / "faiss.index", self._index_dir / "documents.json"),
             ]
 
             index_loaded = False
@@ -68,38 +65,58 @@ class FaissVectorStore:
                     lambda: faiss.IndexFlatIP(self._dimension)  # Inner product для cosine similarity
                 )
 
-    async def add_documents(self, documents: list[Document]) -> None:
-        """Добавить документы в хранилище."""
+    async def add_documents(self, documents: list[Document], batch_size: int = 100) -> None:
+        """Добавить документы в хранилище с батчевой обработкой."""
         await self._ensure_index_loaded()
 
-        logger.info("Добавление документов в FAISS", count=len(documents))
+        logger.info("🔄 Добавление документов в FAISS с батчевой обработкой", 
+                   count=len(documents), 
+                   batch_size=batch_size)
 
-        # Подготавливаем эмбеддинги
-        embeddings = []
-        for doc in documents:
-            if doc.embedding is None:
-                raise ValueError(f"Document {doc.id} missing embedding")
-            embeddings.append(doc.embedding)
+        # Обрабатываем документы батчами для оптимизации памяти
+        total_added = 0
+        for i in range(0, len(documents), batch_size):
+            batch_docs = documents[i : i + batch_size]
+            batch_end = min(i + batch_size, len(documents))
+            
+            logger.debug("Обработка батча", 
+                        batch=f"{i + 1}-{batch_end}",
+                        total=len(documents))
 
-        # Нормализуем для cosine similarity
-        embeddings_array = np.array(embeddings, dtype=np.float32)
-        faiss.normalize_L2(embeddings_array)
+            # Подготавливаем эмбеддинги для батча
+            embeddings = []
+            for doc in batch_docs:
+                if doc.embedding is None:
+                    raise ValueError(f"Document {doc.id} missing embedding")
+                embeddings.append(doc.embedding)
 
-        # Добавляем в индекс
-        loop = asyncio.get_event_loop()
-        current_size = self._index.ntotal
+            # Нормализуем для cosine similarity
+            embeddings_array = np.array(embeddings, dtype=np.float32)
+            faiss.normalize_L2(embeddings_array)
 
-        await loop.run_in_executor(
-            None,
-            self._index.add,
-            embeddings_array
-        )
+            # Добавляем батч в индекс
+            loop = asyncio.get_event_loop()
+            current_size = self._index.ntotal
 
-        # Сохраняем документы
-        for i, doc in enumerate(documents):
-            self._documents[current_size + i] = doc
+            await loop.run_in_executor(
+                None,
+                self._index.add,
+                embeddings_array
+            )
 
-        logger.info("Документы добавлены", total_docs=self._index.ntotal)
+            # Сохраняем документы батча
+            for j, doc in enumerate(batch_docs):
+                self._documents[current_size + j] = doc
+
+            total_added += len(batch_docs)
+            logger.debug("✅ Батч обработан",
+                        batch_docs=len(batch_docs),
+                        total_added=total_added,
+                        total_in_index=self._index.ntotal)
+
+        logger.info("🎉 Все документы добавлены", 
+                   total_docs=self._index.ntotal,
+                   batches_processed=len(range(0, len(documents), batch_size)))
 
     async def search(self, query_embedding: list[float], k: int = 5) -> list[SearchResult]:
         """Поиск похожих документов."""
