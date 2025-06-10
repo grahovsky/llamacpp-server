@@ -24,6 +24,8 @@ cd llamacpp-server
 ```bash
 # Установка только CPU поддержки
 uv sync --extra cpu
+# Для GPU
+uv sync --extra gpu
 ```
 
 #### Установка для разработки
