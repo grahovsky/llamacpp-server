@@ -3,8 +3,9 @@
 
 import structlog
 
+from ..config.settings import get_settings
 from ..domain.models import ChatMessage
-from .templates import CHAT_TEMPLATES, SYSTEM_PROMPTS
+from .templates import get_prompt_template
 
 logger = structlog.get_logger(__name__)
 
@@ -12,60 +13,67 @@ logger = structlog.get_logger(__name__)
 class PromptService:
     """Сервис для работы с промптами."""
 
-    async def get_system_prompt(self, prompt_type: str) -> str:
+    def __init__(self) -> None:
+        """Инициализация сервиса промптов."""
+        settings = get_settings()
+        self._model_type = settings.get_model_type()
+        self._prompt_template = get_prompt_template(self._model_type)
+        
+        logger.info("Промпт сервис инициализирован", model_type=self._model_type)
+
+    async def get_system_prompt(self, prompt_type: str = "default") -> str:
         """Получить системный промпт."""
         logger.debug("Получение системного промпта", prompt_type=prompt_type)
-        return SYSTEM_PROMPTS.get(prompt_type, SYSTEM_PROMPTS["default"])
+        
+        # Базовый системный промпт для RAG
+        default_system_prompt = (
+            "Ты — ассистент, который помогает отвечать на вопросы на основе предоставленной документации. "
+            "Используй только информацию из контекста для ответа. "
+            "Если информации недостаточно, так и скажи."
+        )
+        
+        return default_system_prompt
 
     async def format_chat_prompt(
-        self, messages: list[ChatMessage], template: str = "llama2"
+        self, messages: list[ChatMessage], system_message: str = ""
     ) -> str:
         """Форматировать промпт для чата."""
-        logger.debug("Форматирование промпта", template=template, messages_count=len(messages))
+        logger.debug("Форматирование промпта", 
+                    model_type=self._model_type, 
+                    messages_count=len(messages))
 
-        # Найти системный промпт
-        system_prompt = ""
-        user_messages = []
-
+        # Конвертируем ChatMessage в словари
+        message_dicts = []
         for msg in messages:
-            if msg.role == "system":
-                system_prompt = msg.content
-            elif msg.role == "user":
-                user_messages.append(msg.content)
+            message_dicts.append({
+                "role": msg.role,
+                "content": msg.content
+            })
 
-        # Использовать дефолтный системный промпт если не задан
-        if not system_prompt:
-            system_prompt = SYSTEM_PROMPTS["default"]
-
-        # Объединить пользовательские сообщения
-        user_message = "\n".join(user_messages)
-
-        # Применить шаблон
-        template_str = CHAT_TEMPLATES.get(template, CHAT_TEMPLATES["llama2"])
-
-        return template_str.format(
-            system_prompt=system_prompt,
-            user_message=user_message,
+        # Используем шаблон на основе типа модели
+        return self._prompt_template.format_chat_prompt(
+            messages=message_dicts,
+            system_message=system_message
         )
 
     async def create_conversation_prompt(
-        self, messages: list[ChatMessage], template: str = "llama2"
+        self, messages: list[ChatMessage], system_message: str = ""
     ) -> str:
         """Создать промпт для многооборотной беседы."""
-        logger.debug("Создание промпта для беседы", template=template)
+        logger.debug("Создание промпта для беседы", model_type=self._model_type)
+        
+        # Используем тот же метод что и для чата
+        return await self.format_chat_prompt(messages, system_message)
 
-        # Для многооборотной беседы используем более сложное форматирование
-        formatted_messages = []
-
-        for msg in messages:
-            if msg.role == "system":
-                formatted_messages.append(f"System: {msg.content}")
-            elif msg.role == "user":
-                formatted_messages.append(f"User: {msg.content}")
-            elif msg.role == "assistant":
-                formatted_messages.append(f"Assistant: {msg.content}")
-
-        # Добавляем префикс для ответа ассистента
-        formatted_messages.append("Assistant:")
-
-        return "\n".join(formatted_messages)
+    async def format_rag_prompt(self, query: str, context: list[str], system_message: str = "") -> str:
+        """Форматировать RAG промпт."""
+        logger.debug("Форматирование RAG промпта", 
+                    model_type=self._model_type,
+                    query_len=len(query),
+                    context_docs=len(context))
+        
+        return self._prompt_template.format_rag_prompt(
+            query=query,
+            context=context,
+            system_message=system_message
+        )

@@ -13,17 +13,17 @@ class Settings(BaseSettings):
 
     # === Модель ===
     model_path: Annotated[Path, Field(description="Путь к файлу модели GGUF")] = Path(
-        "models/llama-3.1-8b-q4_k_m.gguf",
-        #"models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        #"models/llama-3.1-8b-q4_k_m.gguf",
+        "models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
         #"models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
         # "models/llama2:7b.gguf"
     )
 
     # === Параметры модели ===
-    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 4096
-    n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 64
+    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 8192
+    n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
-    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 0
+    n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
     main_gpu: Annotated[int, Field(ge=0, description="Основная GPU для вычислений")] = 0
     tensor_split: Annotated[str | None, Field(description="Разделение тензоров между GPU (через запятую)")] = None
 
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # === Управление контекстом и токенами ===
     # Формула: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer
-    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 1024
+    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = 2048
     max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 0
     rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2048
     safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 300
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # === Параметры генерации ===
     top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = 40
     top_p: Annotated[float, Field(ge=0.0, le=1.0, description="Top-P (nucleus) sampling")] = 0.9
-    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = 1.1
+    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = 1.2
 
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"
@@ -79,9 +79,16 @@ class Settings(BaseSettings):
         frozen=True  # Нельзя изменить
     )
     rag_search_k: int = Field(
-        8,
+        5,
         description="Количество документов для поиска в RAG"
     )
+
+    # === Глобальная настройка устройства вычислений ===
+    compute_device: Annotated[str, Field(description="Устройство для вычислений (cpu, cuda, auto)")] = "auto"
+    force_cpu_embedding: Annotated[bool, Field(description="Принудительно использовать CPU для embedding моделей")] = True
+
+    # === Тип модели и шаблоны промптов ===
+    model_type: Annotated[str, Field(description="Тип модели: instruct, chat")] = "instruct"
 
     model_config = {
         "env_prefix": "LLAMACPP_",
@@ -108,6 +115,24 @@ class Settings(BaseSettings):
             if v > n_ctx * 0.7:  # История не должна занимать больше 70% контекста
                 raise ValueError(f"max_history_tokens ({v}) слишком большой для n_ctx ({n_ctx})")
         return v
+
+    @field_validator("compute_device")
+    @classmethod
+    def validate_compute_device(cls, v: str) -> str:
+        """Валидация устройства вычислений."""
+        valid_devices = {"cpu", "cuda", "auto"}
+        if v.lower() not in valid_devices:
+            raise ValueError(f"compute_device должен быть одним из: {valid_devices}")
+        return v.lower()
+
+    @field_validator("model_type")
+    @classmethod
+    def validate_model_type(cls, v: str) -> str:
+        """Валидация типа модели."""
+        valid_types = {"instruct", "chat", "auto"}
+        if v.lower() not in valid_types:
+            raise ValueError(f"model_type должен быть одним из: {valid_types}")
+        return v.lower()
 
     def validate_context_allocation(self) -> None:
         """Проверка корректности распределения токенов контекста."""
@@ -170,6 +195,62 @@ class Settings(BaseSettings):
                 (self.rag_max_context if self.enable_rag else 0) +
                 self.safety_buffer_tokens
             )
+        }
+
+    def get_optimal_device(self) -> str:
+        """Определить оптимальное устройство для вычислений."""
+        if self.compute_device == "cpu":
+            return "cpu"
+        elif self.compute_device == "cuda":
+            return "cuda" if self._is_cuda_available() else "cpu"
+        else:  # auto
+            if self._is_cuda_available() and not self.force_cpu_embedding:
+                return "cuda"
+            return "cpu"
+
+    def get_embedding_device(self) -> str:
+        """Определить устройство для embedding вычислений."""
+        if self.force_cpu_embedding:
+            return "cpu"
+        return self.get_optimal_device()
+
+    def _is_cuda_available(self) -> bool:
+        """Проверить доступность CUDA."""
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except ImportError:
+            return False
+
+    def get_model_type(self) -> str:
+        return self.model_type
+
+    @property
+    def device_info(self) -> dict:
+        """Информация об устройствах для диагностики."""
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+            cuda_device_count = torch.cuda.device_count() if cuda_available else 0
+            cuda_memory = []
+            if cuda_available:
+                for i in range(cuda_device_count):
+                    total_memory = torch.cuda.get_device_properties(i).total_memory
+                    cuda_memory.append(f"GPU {i}: {total_memory // 1024**3}GB")
+        except ImportError:
+            cuda_available = False
+            cuda_device_count = 0
+            cuda_memory = []
+
+        return {
+            "compute_device_setting": self.compute_device,
+            "force_cpu_embedding": self.force_cpu_embedding,
+            "optimal_device": self.get_optimal_device(),
+            "embedding_device": self.get_embedding_device(),
+            "cuda_available": cuda_available,
+            "cuda_device_count": cuda_device_count,
+            "cuda_memory": cuda_memory,
+            "n_gpu_layers": self.n_gpu_layers,
         }
 
 

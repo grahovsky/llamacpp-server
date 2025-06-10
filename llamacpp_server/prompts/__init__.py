@@ -1,6 +1,6 @@
 """Модуль для работы с промптами."""
 
 from .service import PromptService
-from .templates import SYSTEM_PROMPTS
+from .templates import get_prompt_template, PromptTemplateFactory
 
-__all__ = ["PromptService", "SYSTEM_PROMPTS"]
+__all__ = ["PromptService", "get_prompt_template", "PromptTemplateFactory"]

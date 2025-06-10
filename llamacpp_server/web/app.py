@@ -70,8 +70,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Создать FastAPI приложение."""
 
-    # Настройка логирования
-    setup_logging()
+    # Настройка логирования с уровнем из конфигурации
+    from ..config.settings import get_settings
+    settings = get_settings()
+    setup_logging(settings.log_level)
 
     app = FastAPI(
         title="LlamaCpp Server",

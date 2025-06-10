@@ -46,6 +46,39 @@ LLAMACPP_USE_MLOCK=false               # Memory locking
 LLAMACPP_N_GPU_LAYERS=0                # Количество слоев на GPU (0=CPU, -1=все)
 LLAMACPP_MAIN_GPU=0                    # ID основной GPU
 LLAMACPP_TENSOR_SPLIT="0.7,0.3"       # Разделение между GPU (через запятую)
+
+# === Глобальное управление устройствами ===
+LLAMACPP_COMPUTE_DEVICE=auto           # Устройство для вычислений: auto, cpu, cuda
+LLAMACPP_FORCE_CPU_EMBEDDING=false     # Принудительно использовать CPU для embedding
+```
+
+#### Объяснение настроек устройств:
+
+- **COMPUTE_DEVICE**:
+  - `auto` - автоматический выбор лучшего устройства
+  - `cpu` - принудительно использовать CPU для всех вычислений
+  - `cuda` - использовать GPU если доступен, иначе CPU
+
+- **FORCE_CPU_EMBEDDING**:
+  - `true` - embedding модели всегда на CPU (экономия VRAM)
+  - `false` - embedding модели используют COMPUTE_DEVICE
+
+#### Примеры конфигураций:
+
+```bash
+# Максимальная производительность (все на GPU)
+LLAMACPP_COMPUTE_DEVICE=cuda
+LLAMACPP_FORCE_CPU_EMBEDDING=false
+LLAMACPP_N_GPU_LAYERS=-1
+
+# Экономия VRAM (llama на GPU, embedding на CPU)
+LLAMACPP_COMPUTE_DEVICE=cuda
+LLAMACPP_FORCE_CPU_EMBEDDING=true
+LLAMACPP_N_GPU_LAYERS=20
+
+# Только CPU (максимальная совместимость)
+LLAMACPP_COMPUTE_DEVICE=cpu
+LLAMACPP_N_GPU_LAYERS=0
 ```
 
 ### Параметры генерации
@@ -170,3 +203,71 @@ uv run python -c "import llama_cpp; from llama_cpp import llama_cpp; print('CUDA
 ### Ошибки контекста
 - Уменьшите `LLAMACPP_MAX_HISTORY_TOKENS`
 - Увеличьте `LLAMACPP_CONTEXT_RESERVE_TOKENS` 
+
+### Тип модели и шаблоны промптов
+
+```bash
+# === Тип модели ===
+LLAMACPP_MODEL_TYPE=auto               # Тип модели: instruct, chat, auto
+```
+
+#### Объяснение настройки типа модели:
+
+- **MODEL_TYPE**:
+  - `auto` - автоматическое определение типа по имени модели
+  - `instruct` - для instruct моделей (простые промпты)
+  - `chat` - для chat моделей (структурированные промпты с ролями)
+
+#### Автоматическое определение:
+
+Система автоматически определяет тип модели по имени файла:
+
+**Instruct модели** (ключевые слова):
+- `instruct`, `-instruct`, `_instruct`
+- `alpaca`, `vicuna`, `wizard`, `orca`
+
+**Chat модели** (ключевые слова):
+- `chat`, `-chat`, `_chat`
+- `conversation`, `dialogue`
+
+#### Примеры моделей:
+
+```bash
+# Instruct модели
+Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf  → instruct
+alpaca-7b-q4_k_m.gguf                    → instruct
+vicuna-13b-instruct.gguf                 → instruct
+
+# Chat модели  
+llama-3.1-8b-chat-q4_k_m.gguf          → chat
+chatglm-6b-conversation.gguf            → chat
+
+# Автоопределение по умолчанию → instruct
+```
+
+#### Влияние на RAG промпты:
+
+**Instruct формат:**
+```
+Ты — ассистент, который помогает отвечать на вопросы...
+
+Контекст:
+[документы]
+
+Вопрос: Как настроить Jenkins?
+
+Ответ:
+```
+
+**Chat формат:**
+```
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+Ты — ассистент, который помогает отвечать на вопросы...<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Контекст:
+[документы]
+
+Вопрос: Как настроить Jenkins?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+``` 

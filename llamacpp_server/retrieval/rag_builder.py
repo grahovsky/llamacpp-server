@@ -10,6 +10,7 @@ import numpy as np
 import structlog
 from sentence_transformers import SentenceTransformer
 
+from ..config.settings import get_settings
 from .protocols import Document
 from .semantic_chunker import SemanticChunker
 
@@ -89,6 +90,10 @@ class RAGBuilder:
         self.similarity_threshold = similarity_threshold
         self.embedding_model = None
         self.semantic_chunker = None
+        
+        # Получаем настройки устройства
+        settings = get_settings()
+        self.device = settings.get_embedding_device()
 
     async def build_from_confluence_data(
         self,
@@ -108,12 +113,11 @@ class RAGBuilder:
 
         logger.info("📊 Данные загружены", total_pages=len(confluence_data))
 
-        # Загружаем модель эмбеддингов на CPU
-        logger.info("🧠 Загружаем модель эмбеддингов на CPU", model=self.model_name)
-        device = "cpu"  # Принудительно используем CPU
+        # Загружаем модель эмбеддингов
+        logger.info("🧠 Загружаем модель эмбеддингов", model=self.model_name, device=self.device)
         self.embedding_model = SentenceTransformer(self.model_name)
-        self.embedding_model.to(device)
-        logger.info("✅ Модель эмбеддингов загружена на CPU")
+        self.embedding_model.to(self.device)
+        logger.info("✅ Модель эмбеддингов загружена", device=self.device)
 
         # Инициализируем семантический разбивщик с современными техниками
         if self.use_semantic_chunking:
@@ -133,13 +137,13 @@ class RAGBuilder:
         documents = await self._process_documents(confluence_data)
 
         # Создаем эмбеддинги
-        embeddings = await self._create_embeddings(documents, device)
+        embeddings = await self._create_embeddings(documents, self.device)
 
         # Создаем и сохраняем FAISS индекс
         await self._create_and_save_index(documents, embeddings, output_dir)
 
         # Тестируем поиск
-        await self._test_search(embeddings, documents, device)
+        await self._test_search(embeddings, documents, self.device)
 
     async def _process_documents(self, confluence_data: list[dict]) -> list[Document]:
         """Обработать документы из Confluence."""
@@ -217,7 +221,7 @@ class RAGBuilder:
 
     async def _create_embeddings(self, documents: list[Document], device: str) -> list[np.ndarray]:
         """Создать эмбеддинги для документов."""
-        logger.info("🔢 Создаем эмбеддинги для документов")
+        logger.info("🔢 Создаем эмбеддинги для документов", device=device)
         texts = [doc.content for doc in documents]
 
         # Создаем эмбеддинги батчами для экономии памяти

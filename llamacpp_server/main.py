@@ -16,6 +16,12 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         log_config=None,  # Используем наш structlog
+        # Настройки для реального стриминга
+        access_log=False,
+        server_header=False,
+        date_header=False,
+        # Отключение буферизации
+        loop="asyncio",
     )
 
 

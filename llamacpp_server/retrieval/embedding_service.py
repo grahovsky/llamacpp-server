@@ -18,11 +18,12 @@ class EmbeddingService:
         self._model: SentenceTransformer = None
         settings = get_settings()
         self._model_name = settings.embedding_model
+        self._device = settings.get_embedding_device()
 
     async def _ensure_model_loaded(self) -> None:
         """Загружаем модель при первом использовании."""
         if self._model is None:
-            logger.info("Загрузка embedding модели на CPU", model=self._model_name)
+            logger.info("Загрузка embedding модели", model=self._model_name, device=self._device)
             # Загружаем в thread pool чтобы не блокировать event loop
             loop = asyncio.get_event_loop()
             self._model = await loop.run_in_executor(
@@ -30,16 +31,19 @@ class EmbeddingService:
                 lambda: SentenceTransformer(
                     self._model_name,
                     trust_remote_code=True,
-                    device='cpu'  # Принудительно используем CPU
+                    device=self._device
                 )
             )
 
-            # Дополнительно убеждаемся что модель на CPU
-            if torch.cuda.is_available():
-                logger.info("Перемещаем embedding модель на CPU")
+            # Перемещаем на нужное устройство
+            if self._device != 'cpu' and torch.cuda.is_available():
+                logger.info("Перемещаем embedding модель на GPU", device=self._device)
+                await loop.run_in_executor(None, self._model.to, self._device)
+            else:
+                logger.info("Используем CPU для embedding модели")
                 await loop.run_in_executor(None, self._model.to, 'cpu')
 
-            logger.info("Embedding модель загружена на CPU")
+            logger.info("Embedding модель загружена", device=self._device)
 
     async def is_ready(self) -> bool:
         """Проверить готовность модели."""
@@ -54,7 +58,7 @@ class EmbeddingService:
         """Получить эмбеддинг для текста."""
         await self._ensure_model_loaded()
 
-        logger.debug("Создание эмбеддинга на CPU", text_length=len(text))
+        logger.debug("Создание эмбеддинга", text_length=len(text), device=self._device)
 
         # Выполняем embedding в thread pool
         loop = asyncio.get_event_loop()
@@ -70,7 +74,7 @@ class EmbeddingService:
         """Получить эмбеддинги для пакета текстов."""
         await self._ensure_model_loaded()
 
-        logger.debug("Создание пакета эмбеддингов на CPU", count=len(texts))
+        logger.debug("Создание пакета эмбеддингов", count=len(texts), device=self._device)
 
         # Выполняем batch embedding в thread pool
         loop = asyncio.get_event_loop()

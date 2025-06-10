@@ -32,11 +32,13 @@ class Container(containers.DeclarativeContainer):
         vector_store=vector_store
     )
 
+    # Prompt сервис
+    prompt_service = providers.Singleton(PromptService)
+
     # Сервисы - тоже Singleton для избежания повторных инициализаций
     llama_service = providers.Singleton(
         LlamaService,
         llama=llama_instance,
         rag_service=rag_service,
+        prompt_service=prompt_service,
     )
-
-    prompt_service = providers.Singleton(PromptService)

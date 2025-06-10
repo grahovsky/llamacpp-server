@@ -51,7 +51,14 @@ async def chat_completions(
         if request.stream:
             return StreamingResponse(
                 _stream_chat_completion(llama_service, request),
-                media_type="text/plain",
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                },
             )
         else:
             response = await llama_service.chat_completion(request)
@@ -74,7 +81,14 @@ async def text_completions(
         if request.stream:
             return StreamingResponse(
                 _stream_text_completion(llama_service, request),
-                media_type="text/plain",
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                },
             )
         else:
             response = await llama_service.text_completion(request)
@@ -89,8 +103,11 @@ async def _stream_chat_completion(
     llama_service: LlamaServiceProtocol, request: ChatCompletionRequest
 ) -> AsyncIterator[str]:
     """Стриминг chat completion."""
+    import json
     async for chunk in llama_service.chat_completion_stream(request):
-        yield f"data: {chunk}\n\n"
+        # chunk уже dict, конвертируем в JSON
+        chunk_json = json.dumps(chunk, ensure_ascii=False)
+        yield f"data: {chunk_json}\n\n"
     yield "data: [DONE]\n\n"
 
 
@@ -98,6 +115,9 @@ async def _stream_text_completion(
     llama_service: LlamaServiceProtocol, request: TextCompletionRequest
 ) -> AsyncIterator[str]:
     """Стриминг text completion."""
+    import json
     async for chunk in llama_service.text_completion_stream(request):
-        yield f"data: {chunk}\n\n"
+        # chunk уже dict, конвертируем в JSON
+        chunk_json = json.dumps(chunk, ensure_ascii=False)
+        yield f"data: {chunk_json}\n\n"
     yield "data: [DONE]\n\n"
