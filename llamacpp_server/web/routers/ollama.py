@@ -203,7 +203,7 @@ async def ollama_generate(
         completion_request = TextCompletionRequest(
             prompt=prompt,
             model=model_name,
-            max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
+            max_tokens=get_settings().get_effective_max_tokens(request_data.get("max_tokens")),
             temperature=request_data.get("temperature", get_settings().temperature),
             top_p=request_data.get("top_p", get_settings().top_p),
             top_k=request_data.get("top_k", get_settings().top_k),
@@ -285,7 +285,7 @@ async def ollama_chat(
         completion_request = ChatCompletionRequest(
             messages=chat_messages,
             model=model_name,
-            max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
+            max_tokens=get_settings().get_effective_max_tokens(request_data.get("max_tokens")),
             temperature=request_data.get("temperature", get_settings().temperature),
             top_p=request_data.get("top_p", get_settings().top_p),
             top_k=request_data.get("top_k", get_settings().top_k),
@@ -427,12 +427,12 @@ async def _ollama_chat_stream(
         
         async for chunk in llama_service.chat_completion_stream(request):
             chunk_count += 1
-            logger.info(f"📦 Получен chunk #{chunk_count}", chunk_keys=list(chunk.keys()) if chunk else None)
+            logger.debug(f"📦 Получен chunk #{chunk_count}", chunk_keys=list(chunk.keys()) if chunk else None)
             
             if "choices" in chunk and chunk["choices"]:
                 delta = chunk["choices"][0].get("delta", {})
                 content = delta.get("content", "")
-                logger.info(f"💬 Content из chunk: {repr(content)}")
+                logger.debug(f"💬 Content из chunk: {repr(content)}")
 
                 if content:  # Отправляем только если есть контент
                     total_content += content
@@ -447,7 +447,7 @@ async def _ollama_chat_stream(
                         "done": False
                     }
                     chunk_json = f"{json.dumps(response_chunk, ensure_ascii=False)}\n"
-                    logger.info(f"📤 Отправляем chunk: {chunk_json[:100]}...")
+                    logger.debug(f"📤 Отправляем chunk: {chunk_json[:100]}...")
                     yield chunk_json
 
         # Финальный chunk
@@ -468,10 +468,10 @@ async def _ollama_chat_stream(
             "eval_duration": 400000000
         }
         final_json = f"{json.dumps(final_chunk, ensure_ascii=False)}\n"
-        logger.info("📤 Отправляем финальный chunk")
+        logger.debug("📤 Отправляем финальный chunk")
         yield final_json
         
-        logger.info("✅ Ollama chat stream завершен", 
+        logger.debug("✅ Ollama chat stream завершен", 
                    chunks=chunk_count, 
                    total_length=len(total_content))
         

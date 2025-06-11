@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+import traceback
 
 from ..config.settings import get_settings
 from ..prompts.service import PromptService
@@ -112,10 +113,17 @@ class RAGService:
         self, query: str, k: int = 5
     ) -> list[str]:
         """Найти релевантный контекст для запроса с citation-focused форматированием."""
-        logger.info("🔍 RAG поиск контекста с цитированием", query_preview=query[:100], k=k)
+        # Получаем стек вызовов для диагностики
+        stack_trace = traceback.format_stack()
+        calling_functions = [line.strip() for line in stack_trace[-3:-1]]  # Последние 2 вызова
+        
+        logger.info("🔍 RAG поиск контекста с цитированием", 
+                   query_preview=query[:100], k=k,
+                   called_from=calling_functions)
 
         try:
             # Получаем эмбеддинг запроса
+            logger.info("🧠 Создание эмбеддинга для поиска", query_preview=query[:50])
             query_embedding = await self._embedding_service.embed_text(query)
             logger.debug("Эмбеддинг создан", embedding_dim=len(query_embedding))
 

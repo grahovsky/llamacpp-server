@@ -173,7 +173,7 @@ async def webui_generate(
         completion_request = TextCompletionRequest(
             prompt=prompt,
             model=model_name,
-            max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
+            max_tokens=get_settings().get_effective_max_tokens(request_data.get("max_tokens")),
             temperature=request_data.get("temperature", get_settings().temperature),
             top_p=request_data.get("top_p", get_settings().top_p),
             top_k=request_data.get("top_k", get_settings().top_k),
@@ -246,7 +246,7 @@ async def webui_chat(
         completion_request = ChatCompletionRequest(
             messages=chat_messages,
             model=model_name,
-            max_tokens=request_data.get("max_tokens", get_settings().max_response_tokens),
+            max_tokens=get_settings().get_effective_max_tokens(request_data.get("max_tokens")),
             temperature=request_data.get("temperature", get_settings().temperature),
             top_p=request_data.get("top_p", get_settings().top_p),
             top_k=request_data.get("top_k", get_settings().top_k),

@@ -8,20 +8,20 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
-class RAGDefaults:
-    """Дефолтные параметры для RAG-only системы."""
+class LLMDefaults:
+    """Дефолтные параметры для LLM системы (только RAG режим)."""
     
-    # === RAG параметры (единственные в системе) ===
-    TEMPERATURE = 0.5 
+    # === Основные параметры генерации ===
+    TEMPERATURE = 0.7 
     TOP_K = 40
     TOP_P = 0.9
-    REPEAT_PENALTY = 1.1      
-    MAX_TOKENS = 2048          
+    REPEAT_PENALTY = 1.15      
+    MAX_RESPONSE_TOKENS = 2048  # Переименовано для ясности
     SEED = -1
     
-    # === Только для заголовков ===
-    TITLE_TEMPERATURE = 0.2
-    TITLE_REPEAT_PENALTY = 1.1  
+    # === Специальные параметры для генерации заголовков ===
+    TITLE_TEMPERATURE = 0.3
+    TITLE_REPEAT_PENALTY = 1.15  
     TITLE_MAX_TOKENS = 50  
 
 
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     )
 
     # === Параметры модели ===
-    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели")] = 8192
+    n_ctx: Annotated[int, Field(ge=1, description="Размер контекста модели llamacpp")] = 8192
     n_batch: Annotated[int, Field(ge=1, description="Размер батча")] = 512
     n_threads: Annotated[int, Field(ge=1, description="Количество потоков")] = 8
     n_gpu_layers: Annotated[int, Field(ge=0, description="Количество слоев на GPU")] = 30
@@ -50,18 +50,21 @@ class Settings(BaseSettings):
     rope_freq_base: Annotated[float, Field(ge=1.0, description="RoPE frequency base")] = 10000.0
     rope_freq_scale: Annotated[float, Field(gt=0.0, description="RoPE frequency scaling factor")] = 1.0
 
-    # === Управление контекстом и токенами ===
-    # Формула: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer
-    max_response_tokens: Annotated[int, Field(ge=50, le=2048, description="Максимум токенов в ответе")] = RAGDefaults.MAX_TOKENS
+    # === Управление токенами контекста ===
+    # ВАЖНО: n_ctx >= rag_max_context + max_history_tokens + max_response_tokens + safety_buffer_tokens
+    # 
+    # max_response_tokens - это системный лимит на генерацию ответа
+    # Запросы пользователей могут содержать max_tokens, но он не должен превышать max_response_tokens
+    max_response_tokens: Annotated[int, Field(ge=50, le=4096, description="Системный лимит токенов в ответе")] = LLMDefaults.MAX_RESPONSE_TOKENS
     max_history_tokens: Annotated[int, Field(ge=0, description="Максимум токенов в истории чата")] = 0
-    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 2024
+    rag_max_context: Annotated[int, Field(ge=0, description="Максимум токенов для RAG контекста")] = 4048
     safety_buffer_tokens: Annotated[int, Field(ge=50, description="Буфер безопасности для непредвиденных токенов")] = 300
 
-    # === Параметры генерации (RAG дефолты) ===
-    top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = RAGDefaults.TOP_K
-    top_p: Annotated[float, Field(ge=0.0, le=1.0, description="Top-P (nucleus) sampling")] = RAGDefaults.TOP_P
-    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = RAGDefaults.REPEAT_PENALTY
-    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = RAGDefaults.TEMPERATURE
+    # === Параметры генерации (дефолты для RAG) ===
+    top_k: Annotated[int, Field(ge=1, description="Top-K sampling")] = LLMDefaults.TOP_K
+    top_p: Annotated[float, Field(ge=0.0, le=1.0, description="Top-P (nucleus) sampling")] = LLMDefaults.TOP_P
+    repeat_penalty: Annotated[float, Field(ge=0.0, description="Штраф за повторы")] = LLMDefaults.REPEAT_PENALTY
+    temperature: Annotated[float, Field(ge=0.0, le=2.0, description="Температура")] = LLMDefaults.TEMPERATURE
 
     # === Сервер ===
     host: Annotated[str, Field(description="Хост сервера")] = "0.0.0.0"
@@ -96,7 +99,7 @@ class Settings(BaseSettings):
         frozen=True  # Нельзя изменить
     )
     rag_search_k: int = Field(
-        15,
+        8,
         description="Количество документов для поиска в RAG"
     )
 
@@ -114,7 +117,22 @@ class Settings(BaseSettings):
         "case_sensitive": False,
     }
 
-    # === RAG Request Builder Methods ===
+    def get_effective_max_tokens(self, user_max_tokens: int | None = None) -> int:
+        """
+        Определяет эффективный лимит токенов для генерации.
+        
+        Args:
+            user_max_tokens: Запрашиваемое пользователем количество токенов
+            
+        Returns:
+            Эффективный лимит токенов (не больше системного)
+        """
+        if user_max_tokens is None:
+            return self.max_response_tokens
+        
+        # Применяем системный лимит
+        return min(user_max_tokens, self.max_response_tokens)
+
     def build_rag_params(
         self, 
         is_title: bool = False,
@@ -133,26 +151,34 @@ class Settings(BaseSettings):
         if is_title:
             # Специальные параметры для заголовков
             params = {
-                "temperature": RAGDefaults.TITLE_TEMPERATURE,
-                "repeat_penalty": RAGDefaults.TITLE_REPEAT_PENALTY, 
-                "max_tokens": RAGDefaults.TITLE_MAX_TOKENS,
+                "temperature": LLMDefaults.TITLE_TEMPERATURE,
+                "repeat_penalty": LLMDefaults.TITLE_REPEAT_PENALTY, 
+                "max_tokens": LLMDefaults.TITLE_MAX_TOKENS,  # Фиксированный лимит для заголовков
                 "top_k": self.top_k,
                 "top_p": self.top_p,
-                "seed": RAGDefaults.SEED,
+                "seed": LLMDefaults.SEED,
             }
         else:
             # Стандартные RAG параметры
             params = {
                 "temperature": self.temperature,
                 "repeat_penalty": self.repeat_penalty,
-                "max_tokens": RAGDefaults.MAX_TOKENS,
+                "max_tokens": self.max_response_tokens,  # Используем системный лимит
                 "top_k": self.top_k,
                 "top_p": self.top_p,
-                "seed": RAGDefaults.SEED,
+                "seed": LLMDefaults.SEED,
             }
         
-        # Применяем пользовательские переопределения
-        params.update(overrides)
+        # Применяем пользовательские переопределения с валидацией
+        if 'max_tokens' in overrides:
+            # Валидируем пользовательский лимит токенов
+            user_max_tokens = overrides['max_tokens']
+            params['max_tokens'] = self.get_effective_max_tokens(user_max_tokens)
+        
+        # Применяем остальные переопределения
+        for key, value in overrides.items():
+            if key != 'max_tokens':  # max_tokens уже обработан
+                params[key] = value
         
         return params
 

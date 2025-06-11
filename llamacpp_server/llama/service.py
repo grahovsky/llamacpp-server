@@ -59,7 +59,10 @@ class LlamaService:
 
     async def chat_completion(self, request: ChatCompletionRequest) -> CompletionResponse:
         """Chat completion с обязательным RAG для всех запросов."""
-        logger.info("🧠 Chat completion с обязательным RAG", model=request.model)
+        request_id = str(uuid.uuid4())[:8]  # Короткий ID для логов
+        
+        logger.info("🧠 Chat completion с обязательным RAG", 
+                   model=request.model, request_id=request_id)
 
         # Извлекаем пользовательский запрос для анализа
         user_query = self._extract_user_query(request.messages)
@@ -67,20 +70,21 @@ class LlamaService:
         if not user_query:
             return self._create_error_response("Нет пользовательского запроса")
 
-        logger.info("📝 Анализ запроса", query_preview=user_query[:100])
+        logger.info("📝 Анализ запроса", 
+                   query_preview=user_query[:100], request_id=request_id)
 
         # Проверяем, что RAG сервис доступен
         if not self._rag_service:
             logger.error("❌ RAG сервис недоступен - это обязательно для данного проекта")
             return self._create_error_response("RAG сервис недоступен")
 
-        # Определяем тип запроса для выбора стратегии RAG
+        # Определяем тип запроса для выбора стратегии обработки
         if self._is_service_request(user_query):
-            logger.info("🛠️ Служебный запрос - используем упрощенный RAG")
-            return await self._process_service_rag_completion(request, user_query)
+            logger.info("🛠️ Служебный запрос - прямой proxy в LLM (без RAG)", request_id=request_id)
+            return await self._process_service_proxy_completion(request, user_query, request_id)
         else:
-            logger.info("🧠 Пользовательский запрос - используем полный RAG")
-            return await self._process_full_rag_completion(request, user_query)
+            logger.info("🧠 Пользовательский запрос - используем полный RAG", request_id=request_id)
+            return await self._process_full_rag_completion(request, user_query, request_id)
 
     async def chat_completion_stream(
         self, request: ChatCompletionRequest
@@ -104,10 +108,10 @@ class LlamaService:
             yield self._create_stream_error("RAG сервис недоступен")
             return
 
-        # Определяем тип запроса для выбора стратегии RAG
+        # Определяем тип запроса для выбора стратегии обработки
         if self._is_service_request(user_query):
-            logger.info("🛠️ Служебный стриминг запрос - используем упрощенный RAG")
-            async for chunk in self._process_service_rag_completion_stream(request, user_query):
+            logger.info("🛠️ Служебный стриминг запрос - прямой proxy в LLM (без RAG)")
+            async for chunk in self._process_service_proxy_completion_stream(request, user_query):
                 yield chunk
         else:
             logger.info("🧠 Пользовательский стриминг запрос - используем полный RAG")
@@ -196,8 +200,20 @@ class LlamaService:
         # Форматируем для llama.cpp
         formatted_prompt = self._format_chat_messages(request.messages)
 
-        # Получаем централизованные RAG параметры
-        llm_params = self._settings.merge_request_params(request, is_title=False)
+        # 🔍 ЛОГИРОВАНИЕ ФИНАЛЬНОГО ПРОМПТА
+        logger.info("🔤 Финальный промпт для LLM", 
+                   prompt_length=len(formatted_prompt),
+                   starts_with_begin_of_text=formatted_prompt.startswith("<|begin_of_text|>"))
+        
+        # Выводим первые 1000 символов финального промпта
+        logger.info("📋 Финальный промпт (первые 1000 символов):", 
+                   final_prompt_preview=formatted_prompt[:1000])
+
+        # Получаем централизованные RAG параметры с правильной обработкой max_tokens
+        llm_params = self._settings.build_rag_params(
+            is_title=False,
+            max_tokens=request.max_tokens  # Передаем пользовательский лимит для валидации
+        )
 
         # Подготавливаем параметры
         params = {
@@ -232,8 +248,11 @@ class LlamaService:
         """Обработка streaming completion запроса."""
         formatted_prompt = self._format_chat_messages(request.messages)
 
-        # Получаем централизованные RAG параметры
-        llm_params = self._settings.merge_request_params(request, is_title=False)
+        # Получаем централизованные RAG параметры с правильной обработкой max_tokens
+        llm_params = self._settings.build_rag_params(
+            is_title=False,
+            max_tokens=request.max_tokens  # Передаем пользовательский лимит для валидации
+        )
 
         # Подготавливаем параметры
         params = {
@@ -257,7 +276,7 @@ class LlamaService:
         chunk_count = 0
 
         # Простая защита от бесконечного стриминга
-        max_tokens = request.max_tokens or self._settings.max_response_tokens
+        max_tokens = self._settings.get_effective_max_tokens(request.max_tokens)
         token_count = 0
 
         logger.info("🌀 Начало streaming генерации", max_tokens=max_tokens)
@@ -428,7 +447,15 @@ class LlamaService:
         if (len(messages) == 1 and
             messages[0].role == "user" and
             "<|begin_of_text|>" in messages[0].content):
-            return messages[0].content
+            
+            # ВАЖНО: убираем <|begin_of_text|> чтобы избежать дублирования
+            # llama.cpp сам добавит этот токен
+            content = messages[0].content
+            if content.startswith("<|begin_of_text|>"):
+                content = content[len("<|begin_of_text|>"):]
+                logger.debug("🔧 Удален дублированный <|begin_of_text|> токен")
+            
+            return content
 
         # Иначе используем простое форматирование для обычных сообщений
         formatted_parts = []
@@ -546,6 +573,7 @@ class LlamaService:
             "make title",
             "title for",
             "title with an emoji",
+            "conversation title",
 
             # Генерация тегов
             "generate 1-3 broad tags",
@@ -553,24 +581,48 @@ class LlamaService:
             "tags categorizing",
             "broad tags",
             "specific subtopic tags",
+            "themes of the chat",
 
-            # Структурированные задачи
+            # Структурированные задачи Open WebUI
             "### task:",
             "### guidelines:",
             "### output:",
             "### examples:",
             "### chat history:",
+            "<chat_history>",
+            "</chat_history>",
 
-            # Другие служебные операции
+            # Форматы ответов
             "json format:",
             "output format:",
             "response format:",
+            "format: {",
+            '"title":',
+            '"tags":',
+
+            # Анализ чата и метаданные
+            "analyze the conversation",
+            "summarize this chat",
+            "extract key topics",
+            "main subjects discussed",
+            "primary language",
+            "multilingual",
+
+            # Системные инструкции
+            "your entire response must consist",
+            "without any introductory",
+            "raw json object",
+            "without markdown code fences",
+            "parsing failure",
+            "single, raw json",
+            "ensure no conversational text",
         ]
 
         is_service = any(keyword in query_lower for keyword in service_keywords)
 
         if is_service:
-            logger.info("🔍 Служебный запрос обнаружен", keywords=[kw for kw in service_keywords if kw in query_lower])
+            logger.info("🔍 Служебный запрос обнаружен", 
+                       keywords=[kw for kw in service_keywords if kw in query_lower])
 
         return is_service
 
@@ -594,53 +646,140 @@ class LlamaService:
         query_lower = query.lower()
         return any(keyword in query_lower for keyword in title_keywords)
 
-    async def _process_service_rag_completion(self, request: ChatCompletionRequest, user_query: str) -> CompletionResponse:
-        """Обработка служебного запроса с упрощенным RAG контекстом."""
+    async def _process_service_proxy_completion(self, request: ChatCompletionRequest, user_query: str, request_id: str) -> CompletionResponse:
+        """Обработка служебного запроса как прямого proxy в LLM."""
         try:
-            # Для служебных запросов создаем минимальный RAG контекст
-            # без поиска в базе знаний, но с базовой структурой
-            if self._is_title_generation_request(user_query):
-                # Для заголовков - простой контекст
-                service_context = "Создай краткий заголовок для чата на основе его содержимого."
-                rag_prompt = f"{service_context}\n\nЗапрос: {user_query}"
-            else:
-                # Для других служебных задач
-                service_context = "Выполни служебную задачу согласно инструкциям."
-                rag_prompt = f"{service_context}\n\nЗапрос: {user_query}"
-
-            # Создаем RAG сообщения
-            rag_messages = [
-                ChatMessage(role="user", content=rag_prompt)
-            ]
-
-            # Создаем запрос с параметрами для служебных задач
+            # Определяем специальные параметры для служебных запросов
             is_title = self._is_title_generation_request(user_query)
-            llm_params = self._settings.merge_request_params(request, is_title=is_title)
-
-            rag_request = ChatCompletionRequest(
-                messages=rag_messages,
-                model=request.model,
+            
+            # Форматируем служебный запрос в правильном формате Llama 3.1
+            if is_title:
+                # Для заголовков используем минимальный системный промпт
+                formatted_prompt = (
+                    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+                    "Generate a concise JSON title response.\n"
+                    "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
+                    f"{user_query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+                )
+                max_tokens = 50
+                temperature = 0.1
+            else:
+                # Для других служебных запросов используем базовый системный промпт
+                formatted_prompt = (
+                    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+                    "You are a helpful assistant. Provide concise, accurate responses.\n"
+                    "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
+                    f"{user_query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+                )
+                max_tokens = 200
+                temperature = 0.3
+            
+            # Оптимизированные параметры для быстрых служебных ответов
+            response = self._llama.create_completion(
+                prompt=formatted_prompt,
                 stream=False,
-                **llm_params
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_k=20,  # Уменьшено для скорости
+                top_p=0.8,  # Уменьшено для скорости
+                repeat_penalty=1.0,  # Без штрафов для скорости
+                # Критически важно для Llama 3.1 - stop токены
+                stop=["<|eot_id|>", "<|end_of_text|>", "<|im_end|>", "</s>"],
             )
 
-            logger.info("✅ Служебный RAG промпт создан",
-                       original_len=len(user_query),
-                       rag_len=len(rag_prompt),
-                       is_title=is_title)
+            logger.info("✅ Служебный запрос обработан как прямой proxy в LLM", 
+                       is_title=is_title, max_tokens=max_tokens, temp=temperature, request_id=request_id)
 
-            # Обрабатываем запрос
-            return await self._process_completion(rag_request)
+            return self._create_completion_response(response, request.model, "chat.completion")
 
         except Exception as e:
-            logger.error("❌ Ошибка служебной RAG обработки", error=str(e), exc_info=True)
+            logger.error("❌ Ошибка обработки служебного запроса", error=str(e), exc_info=True, request_id=request_id)
             return self._create_error_response(f"Ошибка обработки: {str(e)}")
 
-    async def _process_full_rag_completion(self, request: ChatCompletionRequest, user_query: str) -> CompletionResponse:
+    async def _process_service_proxy_completion_stream(self, request: ChatCompletionRequest, user_query: str) -> AsyncIterator[dict]:
+        """Стриминг обработка служебного запроса как прямого proxy в LLM."""
+        try:
+            # Определяем специальные параметры для служебных запросов
+            is_title = self._is_title_generation_request(user_query)
+            
+            # Форматируем служебный запрос в правильном формате Llama 3.1
+            if is_title:
+                # Для заголовков используем минимальный системный промпт
+                formatted_prompt = (
+                    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+                    "Generate a concise JSON title response.\n"
+                    "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
+                    f"{user_query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+                )
+                max_tokens = 50
+                temperature = 0.1
+            else:
+                # Для других служебных запросов используем базовый системный промпт
+                formatted_prompt = (
+                    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
+                    "You are a helpful assistant. Provide concise, accurate responses.\n"
+                    "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n"
+                    f"{user_query}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+                )
+                max_tokens = 200
+                temperature = 0.3
+            
+            # Оптимизированные параметры для быстрых служебных ответов
+            stream = self._llama.create_completion(
+                prompt=formatted_prompt,
+                stream=True,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_k=20,  # Уменьшено для скорости
+                top_p=0.8,  # Уменьшено для скорости
+                repeat_penalty=1.0,  # Без штрафов для скорости
+                # Критически важно для Llama 3.1 - stop токены
+                stop=["<|eot_id|>", "<|end_of_text|>", "<|im_end|>", "</s>"],
+            )
+
+            logger.info("✅ Служебный запрос обработан как прямой proxy в LLM (streaming)", 
+                       is_title=is_title, max_tokens=max_tokens, temp=temperature)
+
+            # Стримим ответ напрямую от llama
+            chunk_count = 0
+            for chunk in stream:
+                chunk_count += 1
+                logger.debug(f"🔄 Служебный chunk #{chunk_count}")
+                
+                yield {
+                    "choices": [
+                        {
+                            "delta": {
+                                "content": chunk.get("choices", [{}])[0].get("text", "")
+                            },
+                            "finish_reason": chunk.get("choices", [{}])[0].get("finish_reason")
+                        }
+                    ],
+                    "object": "chat.completion.chunk",
+                    "model": request.model
+                }
+
+        except Exception as e:
+            logger.error("❌ Ошибка обработки служебного запроса", error=str(e), exc_info=True)
+            yield self._create_stream_error(f"Ошибка обработки: {str(e)}")
+
+    async def _process_full_rag_completion(self, request: ChatCompletionRequest, user_query: str, request_id: str) -> CompletionResponse:
         """Обработка пользовательского запроса с полным RAG."""
         try:
             # Создаем полный RAG промпт с поиском в базе знаний
             rag_prompt = await self._rag_service.create_rag_prompt(user_query)
+
+            # 🔍 ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ДИАГНОСТИКИ
+            logger.info("🔍 RAG промпт готов к отправке", 
+                       rag_prompt_length=len(rag_prompt),
+                       contains_begin_of_text="<|begin_of_text|>" in rag_prompt, request_id=request_id)
+            
+            # Выводим полный промпт для диагностики
+            logger.debug("🔤 ПОЛНЫЙ RAG ПРОМПТ:", rag_prompt=rag_prompt)
+            
+            # Выводим первые 1000 символов в info логе
+            logger.info("📝 RAG промпт (первые 1000 символов):", 
+                       rag_preview=rag_prompt[:1000])
 
             # RAG промпт уже содержит системный контекст в правильном формате
             # Создаем простое пользовательское сообщение с RAG промптом
@@ -660,57 +799,32 @@ class LlamaService:
 
             logger.info("✅ Полный RAG промпт создан",
                        original_len=len(user_query),
-                       rag_len=len(rag_prompt))
+                       rag_len=len(rag_prompt), request_id=request_id)
 
             # Обрабатываем запрос
             return await self._process_completion(rag_request)
 
         except Exception as e:
-            logger.error("❌ Ошибка полной RAG обработки", error=str(e), exc_info=True)
+            logger.error("❌ Ошибка полной RAG обработки", error=str(e), exc_info=True, request_id=request_id)
             return self._create_error_response(f"Ошибка обработки: {str(e)}")
-
-    async def _process_service_rag_completion_stream(self, request: ChatCompletionRequest, user_query: str) -> AsyncIterator[dict]:
-        """Стриминг обработка служебного запроса с упрощенным RAG."""
-        try:
-            # Для служебных запросов создаем минимальный RAG контекст
-            if self._is_title_generation_request(user_query):
-                service_context = "Создай краткий заголовок для чата на основе его содержимого."
-                rag_prompt = f"{service_context}\n\nЗапрос: {user_query}"
-            else:
-                service_context = "Выполни служебную задачу согласно инструкциям."
-                rag_prompt = f"{service_context}\n\nЗапрос: {user_query}"
-
-            # Создаем RAG сообщения
-            rag_messages = [
-                ChatMessage(role="user", content=rag_prompt)
-            ]
-
-            # Создаем запрос с параметрами для служебных задач
-            is_title = self._is_title_generation_request(user_query)
-            llm_params = self._settings.merge_request_params(request, is_title=is_title)
-
-            rag_request = ChatCompletionRequest(
-                messages=rag_messages,
-                model=request.model,
-                stream=True,
-                **llm_params
-            )
-
-            logger.info("✅ Служебный RAG стриминг промпт создан")
-
-            # Стримим ответ
-            async for chunk in self._process_completion_stream(rag_request):
-                yield chunk
-
-        except Exception as e:
-            logger.error("❌ Ошибка служебного RAG стриминга", error=str(e), exc_info=True)
-            yield self._create_stream_error(f"Ошибка обработки: {str(e)}")
 
     async def _process_full_rag_completion_stream(self, request: ChatCompletionRequest, user_query: str) -> AsyncIterator[dict]:
         """Стриминг обработка пользовательского запроса с полным RAG."""
         try:
             # Создаем полный RAG промпт с поиском в базе знаний
             rag_prompt = await self._rag_service.create_rag_prompt(user_query)
+
+            # 🔍 ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ДИАГНОСТИКИ
+            logger.info("🔍 RAG промпт готов к отправке (streaming)", 
+                       rag_prompt_length=len(rag_prompt),
+                       contains_begin_of_text="<|begin_of_text|>" in rag_prompt)
+            
+            # Выводим полный промпт для диагностики
+            logger.debug("🔤 ПОЛНЫЙ RAG ПРОМПТ (streaming):", rag_prompt=rag_prompt)
+            
+            # Выводим первые 1000 символов в info логе
+            logger.info("📝 RAG промпт (первые 1000 символов, streaming):", 
+                       rag_preview=rag_prompt[:1000])
 
             # RAG промпт уже содержит системный контекст в правильном формате
             # Создаем простое пользовательское сообщение с RAG промптом

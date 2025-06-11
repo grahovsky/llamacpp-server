@@ -157,9 +157,9 @@ class RAGBuilder:
             # Предобрабатываем текст
             content = preprocess_text(content)
 
-            if not content or len(content) < 50:  # Пропускаем очень короткие документы
-                logger.debug("Пропускаем короткий документ", title=metadata.get("title", ""))
-                continue
+            # if not content or len(content) < 50:  # Пропускаем очень короткие документы
+            #     logger.debug("Пропускаем короткий документ", title=metadata.get("title", ""))
+            #     continue
 
             title = metadata.get("title", "Без названия")
             source = metadata.get("source", "")

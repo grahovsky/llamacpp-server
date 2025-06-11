@@ -135,8 +135,8 @@ async def main():
         rag_builder = RAGBuilder(
             model_name="BAAI/bge-m3",
             embedding_dim=1024,
-            chunk_size=500,
-            overlap_size=100,
+            chunk_size=512,
+            overlap_size=50,
             batch_size=100,
             use_semantic_chunking=use_semantic,
             similarity_threshold=0.7  # Порог сходства для разделения чанков

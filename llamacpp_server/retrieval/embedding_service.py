@@ -1,6 +1,7 @@
 """Сервис для работы с эмбеддингами BGE-M3."""
 
 import asyncio
+from typing import Any
 
 import structlog
 import torch
@@ -14,7 +15,7 @@ logger = structlog.get_logger(__name__)
 class EmbeddingService:
     """Сервис для создания эмбеддингов с BGE-M3."""
 
-    def __init__(self, settings = None) -> None:
+    def __init__(self, settings=None) -> None:
         self._model: SentenceTransformer = None
         
         # Если настройки не переданы, получаем их (для обратной совместимости)
@@ -69,8 +70,10 @@ class EmbeddingService:
         loop = asyncio.get_event_loop()
         embedding = await loop.run_in_executor(
             None,
-            self._model.encode,
-            text
+            lambda: self._model.encode(
+                text,
+                show_progress_bar=False  # Отключаем прогресс бар для избежания вывода в логи
+            )
         )
 
         return embedding.tolist()
@@ -85,8 +88,10 @@ class EmbeddingService:
         loop = asyncio.get_event_loop()
         embeddings = await loop.run_in_executor(
             None,
-            self._model.encode,
-            texts
+            lambda: self._model.encode(
+                texts,
+                show_progress_bar=False  # Отключаем прогресс бар для избежания вывода в логи
+            )
         )
 
         return [emb.tolist() for emb in embeddings]
