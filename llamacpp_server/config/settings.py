@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Dict, Any
+from typing import Annotated, Dict, Any, Optional
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -109,6 +109,49 @@ class Settings(BaseSettings):
 
     # === Тип модели и шаблоны промптов ===
     model_type: Annotated[str, Field(description="Тип модели: instruct, chat")] = "instruct"
+
+    # RAG и Retrieval настройки
+    rag_enabled: bool = Field(default=False, description="Включить RAG функциональность")
+    
+    # Embedding настройки
+    embedding_model: str = Field(default="BAAI/bge-m3", description="Модель для эмбеддингов")
+    embedding_provider: str = Field(default="sentence_transformers", description="Провайдер эмбеддингов (sentence_transformers, openai, model2vec)")
+    embedding_device: str = Field(default="auto", description="Устройство для эмбеддинг модели")
+    openai_api_key: Optional[str] = Field(default=None, description="API ключ для OpenAI")
+    
+    # Chunking настройки  
+    chunking_strategy: str = Field(default="semantic", description="Стратегия чанкинга (semantic, title, hybrid)")
+    chunk_size: int = Field(default=1500, description="Максимальный размер чанка")
+    chunk_min_size: int = Field(default=100, description="Минимальный размер чанка")
+    chunk_overlap: int = Field(default=100, description="Перекрытие между чанками")
+    similarity_threshold: float = Field(default=0.7, description="Порог схожести для семантического чанкинга")
+    
+    # =========================
+    # MODERN RAG SETTINGS 2025
+    # =========================
+    
+    # Переключатель между старым и современным RAG
+    use_modern_rag: bool = Field(default=True, description="Использовать современные RAG компоненты")
+    
+    # Modern chunking settings
+    modern_chunking_strategy: str = Field(default="hybrid", description="Современная стратегия чанкинга (semantic, title, hybrid)")
+    modern_chunk_size: int = Field(default=512, description="Размер чанка для современного чанкера")
+    modern_chunk_overlap: int = Field(default=50, description="Перекрытие для современного чанкера")
+    
+    # Modern embedding settings
+    modern_embedding_provider: str = Field(default="sentence_transformers", description="Современный провайдер эмбеддингов (sentence_transformers, model2vec, openai)")
+    modern_embedding_model: str = Field(default="BAAI/bge-m3", description="Модель для современных эмбеддингов")
+    
+    # Modern vector store settings
+    modern_vector_store_type: str = Field(default="chromadb", description="Тип современного векторного хранилища (только chromadb)")
+    modern_collection_name: str = Field(default="rag_documents", description="Имя коллекции для современного векторного хранилища")
+    
+    # ChromaDB specific settings
+    chromadb_path: str = Field(default="./data/chromadb", description="Путь к ChromaDB базе данных")
+    
+    # Modern performance settings
+    modern_batch_size: int = Field(default=32, description="Размер батча для современного RAG")
+    modern_min_score: float = Field(default=0.0, description="Минимальный score для фильтрации результатов")
 
     model_config = {
         "env_prefix": "LLAMACPP_",

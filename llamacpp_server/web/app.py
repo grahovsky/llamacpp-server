@@ -39,18 +39,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("🧠 Предварительная инициализация RAG компонентов")
 
         try:
-            # Получаем сервисы для их инициализации
-            embedding_service = container.embedding_service()
-            vector_store = container.vector_store()
+            # Получаем RAG сервис для его инициализации
             rag_service = container.rag_service()
 
-            # Проверяем готовность embedding service
-            await embedding_service.is_ready()
-            logger.info("✅ Embedding service готов")
+            if settings.use_modern_rag:
+                logger.info("✅ Используется современный RAG")
+                # Современный RAG сервис имеет метод is_ready()
+                if hasattr(rag_service, 'is_ready'):
+                    await rag_service.is_ready()
+                    logger.info("✅ Современный RAG сервис готов")
+                else:
+                    # Fallback к initialize если нет is_ready
+                    if hasattr(rag_service, 'initialize'):
+                        await rag_service.initialize()
+                        logger.info("✅ Современный RAG сервис инициализирован")
+            else:
+                logger.info("⚠️ Используется старый RAG")
+                # Получаем сервисы для их инициализации
+                embedding_service = container.embedding_service()
+                vector_store = container.vector_store()
 
-            # Принудительно загружаем FAISS индекс если существует
-            await vector_store._ensure_index_loaded()
-            logger.info("✅ Vector store готов")
+                # Проверяем готовность embedding service
+                await embedding_service.is_ready()
+                logger.info("✅ Embedding service готов")
+
+                # Принудительно загружаем FAISS индекс если существует
+                await vector_store._ensure_index_loaded()
+                logger.info("✅ Vector store готов")
 
             logger.info("🎯 RAG компоненты успешно инициализированы")
 

@@ -1,7 +1,20 @@
 """Протоколы для RAG системы."""
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Protocol
+
+
+class EmbeddingProvider(Enum):
+    """Провайдеры эмбеддингов."""
+    SENTENCE_TRANSFORMERS = "sentence_transformers"
+    MODEL2VEC = "model2vec"
+    OPENAI = "openai"
+
+
+class VectorStoreType(Enum):
+    """Типы векторных хранилищ."""
+    CHROMADB = "chroma"
 
 
 @dataclass
